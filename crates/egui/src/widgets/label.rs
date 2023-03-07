@@ -133,8 +133,18 @@ impl Label {
                 .translate(vec2(pos.x, pos.y));
             let mut response = ui.allocate_rect(rect, sense);
             for row in text_galley.galley.rows.iter().skip(1) {
-                let rect = row.rect.translate(vec2(pos.x, pos.y));
-                response |= ui.allocate_rect(rect, sense);
+                // bu5hm4nn: allocate_rect() will call Layout::advance_after_rects()
+                // which adds an extra item_spacing.x to the cursor when two consecutive
+                // newline characters '\n' are added to a label.
+                // To fix this, when the glyphs are empty, we will call end_row() which
+                // does the cursor advance correctly. I could not find a way to fix
+                // Layout::advance_after_rects() without breaking layout completely.
+                if row.glyphs.is_empty() {
+                    ui.end_row();
+                } else {
+                    let rect = row.rect.translate(vec2(pos.x, pos.y));
+                    response |= ui.allocate_rect(rect, sense);
+                }
             }
             (pos, text_galley, response)
         } else {
