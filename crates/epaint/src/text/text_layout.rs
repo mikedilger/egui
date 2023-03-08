@@ -268,7 +268,6 @@ fn line_break(paragraph: &Paragraph, job: &LayoutJob, out_rows: &mut Vec<Row>, e
                     rect: rect_from_x_range(first_row_indentation..=first_row_indentation),
                     ends_with_newline: false,
                 });
-                row_start_x += first_row_indentation;
                 first_row_indentation = 0.0;
             } else if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere)
             {
