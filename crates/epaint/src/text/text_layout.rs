@@ -103,6 +103,9 @@ fn layout_section(
         paragraph.empty_paragraph_height = font_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
     }
 
+    // TODO(bu5hm4nn): in a label widget, `leading_space` is used to adjust for existing text in a screen row,
+    // but the comment on `LayoutSection::leading_space` makes it clear it was originally intended for typographical
+    // indentation and not for screen layout
     paragraph.cursor_x += leading_space;
 
     let mut last_glyph_id = None;
@@ -198,27 +201,17 @@ fn line_break(
     let mut non_empty_rows = 0;
 
     for i in 0..paragraph.glyphs.len() {
-        let potential_row_width = paragraph.glyphs[i].max_x() - row_start_x;
+        let potential_row_width = paragraph.glyphs[i].max_x() - row_start_x - first_row_indentation;
 
         if job.wrap.max_rows > 0 && non_empty_rows >= job.wrap.max_rows {
             break;
         }
 
-        if potential_row_width > job.wrap.max_width {
-            if first_row_indentation > 0.0
-                && !row_break_candidates.has_good_candidate(job.wrap.break_anywhere)
-            {
-                // Allow the first row to be completely empty, because we know there will be more space on the next row:
-                // TODO(emilk): this records the height of this first row as zero, though that is probably fine since first_row_indentation usually comes with a first_row_min_height.
-                out_rows.push(Row {
-                    glyphs: vec![],
-                    visuals: Default::default(),
-                    rect: rect_from_x_range(first_row_indentation..=first_row_indentation),
-                    ends_with_newline: false,
-                });
-                first_row_indentation = 0.0;
-            } else if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere)
-            {
+        // (bu5hm4nn): we want to actually allow as much text as possible on the first line so
+        // we don't need a special case for the first row, but we need to subtract
+        // the first_row_indentation from the allowed max width
+        if potential_row_width > (job.wrap.max_width - first_row_indentation) {
+            if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere) {
                 let glyphs: Vec<Glyph> = paragraph.glyphs[row_start_idx..=last_kept_index]
                     .iter()
                     .copied()
@@ -242,6 +235,11 @@ fn line_break(
                 row_start_x = paragraph.glyphs[row_start_idx].pos.x;
                 row_break_candidates = Default::default();
                 non_empty_rows += 1;
+
+                // (bu5hm4nn) first row indentation gets consumed the first time it's used
+                if first_row_indentation > 0.0 {
+                    first_row_indentation = 0.0
+                }
             } else {
                 // Found no place to break, so we have to overrun wrap_width.
             }
@@ -762,6 +760,7 @@ impl RowBreakCandidates {
             .flatten()
     }
 
+    #[allow(dead_code)]
     fn has_good_candidate(&self, break_anywhere: bool) -> bool {
         if break_anywhere {
             self.any.is_some()
@@ -853,5 +852,38 @@ fn test_pre_cjk() {
             .map(|row| row.glyphs.iter().map(|g| g.chr).collect::<String>())
             .collect::<Vec<_>>(),
         vec!["日本語とEnglish", "の混在した文章"]
+    );
+}
+
+#[test]
+fn test_line_break_first_row_not_empty() {
+    let mut fonts = FontsImpl::new(1.0, 1024, super::FontDefinitions::default());
+    let mut layout_job = LayoutJob::single_section(
+        "SomeSuperLongTextThatDoesNotHaveAnyGoodBreakCandidatesButStillNeedsToBeBroken".into(),
+        super::TextFormat::default(),
+    );
+
+    // a small area
+    layout_job.wrap.max_width = 110.0;
+
+    // give the first row a leading space, simulating that there already is
+    // text in this visual row
+    layout_job.sections.first_mut().unwrap().leading_space = 50.0;
+
+    let galley = super::layout(&mut fonts, layout_job.into());
+    assert_eq!(
+        galley
+            .rows
+            .iter()
+            .map(|row| row.glyphs.iter().map(|g| g.chr).collect::<String>())
+            .collect::<Vec<_>>(),
+        vec![
+            "SomeSup",
+            "erLongTextThat",
+            "DoesNotHaveAn",
+            "yGoodBreakCand",
+            "idatesButStillNe",
+            "edsToBeBroken"
+        ]
     );
 }
