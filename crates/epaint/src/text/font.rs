@@ -190,7 +190,7 @@ impl FontImpl {
             if let Some(space) = self.glyph_info(' ') {
                 let glyph_info = GlyphInfo {
                     advance_width: crate::text::TAB_SIZE as f32 * space.advance_width,
-                    ..GlyphInfo::default()
+                    ..space
                 };
                 self.glyph_info_cache.write().insert(c, glyph_info);
                 return Some(glyph_info);
