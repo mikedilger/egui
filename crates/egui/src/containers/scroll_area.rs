@@ -160,7 +160,6 @@ impl ScrollArea {
         }
     }
 
-
     /// The maximum width of the outer frame of the scroll area.
     ///
     /// Use `f32::INFINITY` if you want the scroll area to expand to fit the surrounding [`Ui`] (default).
@@ -716,7 +715,7 @@ impl Prepared {
                 if has_bar[d] {
                     let scroll_delta = match override_scroll_delta {
                         Some(delta) => delta,
-                        None => ui.ctx().frame_state(|fs| fs.scroll_delta)
+                        None => ui.ctx().frame_state(|fs| fs.scroll_delta),
                     };
 
                     let scrolling_up = state.offset[d] > 0.0 && scroll_delta[d] > 0.0;
