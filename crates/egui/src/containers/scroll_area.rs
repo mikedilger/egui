@@ -193,6 +193,20 @@ pub struct ScrollArea {
 }
 
 impl ScrollArea {
+    pub fn is_scrolling(ui: &Ui, id_source: Id) -> bool {
+        let id = ui.make_persistent_id(id_source);
+        let scroll_target = ui.ctx().pass_state(|state| {
+            state.scroll_target[0].is_some() || state.scroll_target[1].is_some()
+        });
+        if let Some(state) = State::load(ui.ctx(), id) {
+            state.vel != Vec2::ZERO || scroll_target
+        } else {
+            false
+        }
+    }
+}
+
+impl ScrollArea {
     /// Create a horizontal scroll area.
     #[inline]
     pub fn horizontal() -> Self {
