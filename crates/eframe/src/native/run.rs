@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
 use winit::event_loop::{
     ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget,
 };
@@ -238,9 +239,15 @@ fn run_and_return(
 
     // On Windows this clears out events so that we can later create another window.
     // See https://github.com/emilk/egui/pull/1889 for details.
-    event_loop.run_return(|_, _, control_flow| {
-        control_flow.set_exit();
-    });
+    //
+    // Note that this approach may cause issues on macOS (emilk/egui#2768); therefore,
+    // we only apply this approach on Windows to minimize the affect.
+    #[cfg(windows)]
+    {
+        event_loop.run_return(|_, _, control_flow| {
+            control_flow.set_exit();
+        });
+    }
 
     returned_result
 }
@@ -339,7 +346,6 @@ mod glow_integration {
         prelude::{GlDisplay, NotCurrentGlContextSurfaceAccessor, PossiblyCurrentGlContext},
         surface::GlSurface,
     };
-    use raw_window_handle::HasRawWindowHandle;
 
     use super::*;
 
@@ -682,7 +688,12 @@ mod glow_integration {
         }
 
         fn init_run_state(&mut self, event_loop: &EventLoopWindowTarget<UserEvent>) -> Result<()> {
-            let storage = epi_integration::create_storage(&self.app_name);
+            let storage = epi_integration::create_storage(
+                self.native_options
+                    .app_id
+                    .as_ref()
+                    .unwrap_or(&self.app_name),
+            );
 
             let (gl_window, gl) = Self::create_glutin_windowed_context(
                 event_loop,
@@ -745,6 +756,8 @@ mod glow_integration {
                 gl: Some(gl.clone()),
                 #[cfg(feature = "wgpu")]
                 wgpu_render_state: None,
+                raw_display_handle: gl_window.window().raw_display_handle(),
+                raw_window_handle: gl_window.window().raw_window_handle(),
             });
 
             if app.warm_up_enabled() {
@@ -794,6 +807,10 @@ mod glow_integration {
 
         fn run_ui_and_paint(&mut self) -> EventResult {
             if let Some(running) = &mut self.running {
+                if running.gl_window.window.is_none() {
+                    return EventResult::Wait;
+                }
+
                 #[cfg(feature = "puffin")]
                 puffin::GlobalProfiler::lock().new_frame();
                 crate::profile_scope!("frame");
@@ -1204,6 +1221,8 @@ mod wgpu_integration {
                 #[cfg(feature = "glow")]
                 gl: None,
                 wgpu_render_state,
+                raw_display_handle: window.raw_display_handle(),
+                raw_window_handle: window.raw_window_handle(),
             });
 
             if app.warm_up_enabled() {
@@ -1350,7 +1369,12 @@ mod wgpu_integration {
                             self.set_window(window)?;
                         }
                     } else {
-                        let storage = epi_integration::create_storage(&self.app_name);
+                        let storage = epi_integration::create_storage(
+                            self.native_options
+                                .app_id
+                                .as_ref()
+                                .unwrap_or(&self.app_name),
+                        );
                         let window = Self::create_window(
                             event_loop,
                             storage.as_deref(),

@@ -20,6 +20,13 @@ use std::any::Any;
 pub use crate::native::run::UserEvent;
 
 #[cfg(not(target_arch = "wasm32"))]
+use raw_window_handle::{
+    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use static_assertions::assert_not_impl_any;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(feature = "glow", feature = "wgpu"))]
 pub use winit::event_loop::EventLoopBuilder;
 
@@ -64,6 +71,34 @@ pub struct CreationContext<'s> {
     /// Can be used to manage GPU resources for custom rendering with WGPU using [`egui::PaintCallback`]s.
     #[cfg(feature = "wgpu")]
     pub wgpu_render_state: Option<egui_wgpu::RenderState>,
+
+    /// Raw platform window handle
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) raw_window_handle: RawWindowHandle,
+
+    /// Raw platform display handle for window
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) raw_display_handle: RawDisplayHandle,
+}
+
+// Implementing `Clone` would violate the guarantees of `HasRawWindowHandle` and `HasRawDisplayHandle`.
+#[cfg(not(target_arch = "wasm32"))]
+assert_not_impl_any!(CreationContext<'_>: Clone);
+
+#[allow(unsafe_code)]
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl HasRawWindowHandle for CreationContext<'_> {
+    fn raw_window_handle(&self) -> RawWindowHandle {
+        self.raw_window_handle
+    }
+}
+
+#[allow(unsafe_code)]
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl HasRawDisplayHandle for CreationContext<'_> {
+    fn raw_display_handle(&self) -> RawDisplayHandle {
+        self.raw_display_handle
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -105,11 +140,12 @@ pub trait App {
     ///
     /// On web the state is stored to "Local Storage".
     /// On native the path is picked using [`directories_next::ProjectDirs::data_dir`](https://docs.rs/directories-next/2.0.0/directories_next/struct.ProjectDirs.html#method.data_dir) which is:
-    /// * Linux:   `/home/UserName/.local/share/APPNAME`
-    /// * macOS:   `/Users/UserName/Library/Application Support/APPNAME`
-    /// * Windows: `C:\Users\UserName\AppData\Roaming\APPNAME`
+    /// * Linux:   `/home/UserName/.local/share/APP_ID`
+    /// * macOS:   `/Users/UserName/Library/Application Support/APP_ID`
+    /// * Windows: `C:\Users\UserName\AppData\Roaming\APP_ID`
     ///
-    /// where `APPNAME` is what is given to `eframe::run_native`.
+    /// where `APP_ID` is determined by either [`NativeOptions::app_id`] or
+    /// the title argument to [`crate::run_native`].
     fn save(&mut self, _storage: &mut dyn Storage) {}
 
     /// Called when the user attempts to close the desktop window and/or quit the application.
@@ -260,10 +296,10 @@ pub struct NativeOptions {
     /// [drag_and_drop]: https://docs.rs/winit/latest/x86_64-pc-windows-msvc/winit/platform/windows/trait.WindowBuilderExtWindows.html#tymethod.with_drag_and_drop
     pub drag_and_drop_support: bool,
 
-    /// The application icon, e.g. in the Windows task bar etc.
+    /// The application icon, e.g. in the Windows task bar or the alt-tab menu.
     ///
-    /// This doesn't work on Mac and on Wayland.
-    /// See <https://docs.rs/winit/latest/winit/window/struct.Window.html#method.set_window_icon> for more.
+    /// The default icon is a white `e` on a black background (for "egui" or "eframe").
+    /// If you prefer the OS default, set this to `None`.
     pub icon_data: Option<IconData>,
 
     /// The initial (inner) position of the native window in points (logical pixels).
@@ -383,6 +419,50 @@ pub struct NativeOptions {
     /// Configures wgpu instance/device/adapter/surface creation and renderloop.
     #[cfg(feature = "wgpu")]
     pub wgpu_options: egui_wgpu::WgpuConfiguration,
+
+    /// The application id, used for determining the folder to persist the app to.
+    ///
+    /// On native the path is picked using [`directories_next::ProjectDirs::data_dir`](https://docs.rs/directories-next/2.0.0/directories_next/struct.ProjectDirs.html#method.data_dir) which is:
+    /// * Linux:   `/home/UserName/.local/share/APP_ID`
+    /// * macOS:   `/Users/UserName/Library/Application Support/APP_ID`
+    /// * Windows: `C:\Users\UserName\AppData\Roaming\APP_ID`
+    ///
+    /// If you don't set [`Self::app_id`], the title argument to [`crate::run_native`]
+    /// will be used instead.
+    ///
+    /// ### On Wayland
+    /// On Wauland this sets the Application ID for the window.
+    ///
+    /// The application ID is used in several places of the compositor, e.g. for
+    /// grouping windows of the same application. It is also important for
+    /// connecting the configuration of a `.desktop` file with the window, by
+    /// using the application ID as file name. This allows e.g. a proper icon
+    /// handling under Wayland.
+    ///
+    /// See [Waylands XDG shell documentation][xdg-shell] for more information
+    /// on this Wayland-specific option.
+    ///
+    /// [xdg-shell]: https://wayland.app/protocols/xdg-shell#xdg_toplevel:request:set_app_id
+    ///
+    /// # Example
+    /// ``` no_run
+    /// fn main() -> eframe::Result<()> {
+    ///
+    ///     let mut options = eframe::NativeOptions::default();
+    ///     // Set the application ID for Wayland only on Linux
+    ///     #[cfg(target_os = "linux")]
+    ///     {
+    ///         options.app_id = Some("egui-example".to_string());
+    ///     }
+    ///
+    ///     eframe::run_simple_native("My egui App", options, move |ctx, _frame| {
+    ///         egui::CentralPanel::default().show(ctx, |ui| {
+    ///             ui.heading("My egui Application");
+    ///         });
+    ///     })
+    /// }
+    /// ```
+    pub app_id: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -396,6 +476,8 @@ impl Clone for NativeOptions {
 
             #[cfg(feature = "wgpu")]
             wgpu_options: self.wgpu_options.clone(),
+
+            app_id: self.app_id.clone(),
 
             ..*self
         }
@@ -414,8 +496,12 @@ impl Default for NativeOptions {
             #[cfg(target_os = "macos")]
             fullsize_content: false,
 
+            // We set a default "egui" or "eframe" icon, which is usually more distinctive than the default OS icon.
+            icon_data: Some(
+                IconData::try_from_png_bytes(&include_bytes!("../../data/icon.png")[..]).unwrap(),
+            ),
+
             drag_and_drop_support: true,
-            icon_data: None,
             initial_window_pos: None,
             initial_window_size: None,
             min_window_size: None,
@@ -449,6 +535,8 @@ impl Default for NativeOptions {
 
             #[cfg(feature = "wgpu")]
             wgpu_options: egui_wgpu::WgpuConfiguration::default(),
+
+            app_id: None,
         }
     }
 }
@@ -642,6 +730,34 @@ pub struct Frame {
     /// such that it can be retrieved during [`App::post_rendering`] with [`Frame::screenshot`]
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) screenshot: std::cell::Cell<Option<egui::ColorImage>>,
+
+    /// Raw platform window handle
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) raw_window_handle: RawWindowHandle,
+
+    /// Raw platform display handle for window
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) raw_display_handle: RawDisplayHandle,
+}
+
+// Implementing `Clone` would violate the guarantees of `HasRawWindowHandle` and `HasRawDisplayHandle`.
+#[cfg(not(target_arch = "wasm32"))]
+assert_not_impl_any!(Frame: Clone);
+
+#[allow(unsafe_code)]
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl HasRawWindowHandle for Frame {
+    fn raw_window_handle(&self) -> RawWindowHandle {
+        self.raw_window_handle
+    }
+}
+
+#[allow(unsafe_code)]
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl HasRawDisplayHandle for Frame {
+    fn raw_display_handle(&self) -> RawDisplayHandle {
+        self.raw_display_handle
+    }
 }
 
 impl Frame {
@@ -683,6 +799,7 @@ impl Frame {
     /// * Called in [`App::update`]
     /// * [`Frame::request_screenshot`] wasn't called on this frame during [`App::update`]
     /// * The rendering backend doesn't support this feature (yet). Currently implemented for wgpu and glow, but not with wasm as target.
+    /// * Wgpu's GL target is active (not yet supported)
     /// * Retrieving the data was unsuccessful in some way.
     ///
     /// See also [`egui::ColorImage::region`]

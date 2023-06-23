@@ -3,6 +3,8 @@ use winit::event_loop::EventLoopWindowTarget;
 #[cfg(target_os = "macos")]
 use winit::platform::macos::WindowBuilderExtMacOS as _;
 
+use raw_window_handle::{HasRawDisplayHandle as _, HasRawWindowHandle as _};
+
 #[cfg(feature = "accesskit")]
 use egui::accesskit;
 use egui::NumExt as _;
@@ -116,6 +118,12 @@ pub fn window_builder<E>(
             .with_title_hidden(true)
             .with_titlebar_transparent(true)
             .with_fullsize_content_view(true);
+    }
+
+    #[cfg(all(feature = "wayland", target_os = "linux"))]
+    if let Some(app_id) = &native_options.app_id {
+        use winit::platform::wayland::WindowBuilderExtWayland as _;
+        window_builder = window_builder.with_name(app_id, "");
     }
 
     if let Some(min_size) = *min_window_size {
@@ -374,6 +382,8 @@ impl EpiIntegration {
             #[cfg(feature = "wgpu")]
             wgpu_render_state,
             screenshot: std::cell::Cell::new(None),
+            raw_display_handle: window.raw_display_handle(),
+            raw_window_handle: window.raw_window_handle(),
         };
 
         let mut egui_winit = egui_winit::State::new(event_loop);
@@ -557,6 +567,7 @@ impl EpiIntegration {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub fn save(&mut self, _app: &mut dyn epi::App, _window: &winit::window::Window) {
         #[cfg(feature = "persistence")]
         if let Some(storage) = self.frame.storage_mut() {
