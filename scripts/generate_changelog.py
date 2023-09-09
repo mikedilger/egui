@@ -131,6 +131,7 @@ def main() -> None:
         "ecolor",
         "eframe",
         "egui_extras",
+        "egui_plot",
         "egui_glow",
         "egui-wgpu",
         "egui-winit",
@@ -164,7 +165,11 @@ def main() -> None:
                 if gh_user_name not in OFFICIAL_DEVS:
                     summary += f" (thanks [@{gh_user_name}](https://github.com/{gh_user_name})!)"
 
+            if 'typo' in labels:
+                continue # We get so many typo PRs. Let's not flood the changelog with them.
+
             added = False
+
             for crate in crate_names:
                 if crate in labels:
                     sections.setdefault(crate, []).append(summary)

@@ -8,7 +8,7 @@ authors = [
 ]
 description = "Extra functionality and widgets for the egui GUI library"
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.70"
 homepage = "https://github.com/emilk/egui"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -26,15 +26,25 @@ all-features = true
 [features]
 default = []
 
+## Shorthand for enabling `svg`, `image`, and `ehttp`.
+all-loaders = ["svg", "image", "http"]
+
 ## Enable [`DatePickerButton`] widget.
 datepicker = ["chrono"]
-
-## Support loading svg images.
-svg = ["resvg", "tiny-skia", "usvg"]
 
 ## Log warnings using [`log`](https://docs.rs/log) crate.
 log = ["dep:log", "egui/log"]
 
+## Add support for loading images via HTTP.
+http = ["dep:ehttp"]
+
+## Enable profiling with the [`puffin`](https://docs.rs/puffin) crate.
+##
+## Only enabled on native, because of the low resolution (1ms) of clocks in browsers.
+puffin = ["dep:puffin", "egui/puffin"]
+
+## Support loading svg images.
+svg = ["resvg", "tiny-skia", "usvg"]
 
 [dependencies]
 egui = { version = "0.22.0", path = "../egui", default-features = false }
@@ -65,7 +75,12 @@ image = { version = "0.24", optional = true, default-features = false }
 # feature "log"
 log = { version = "0.4", optional = true, features = ["std"] }
 
+puffin = { version = "0.16", optional = true }
+
 # svg feature
 resvg = { version = "0.28", optional = true, default-features = false }
 tiny-skia = { version = "0.8", optional = true, default-features = false } # must be updated in lock-step with resvg
 usvg = { version = "0.28", optional = true, default-features = false }
+
+# http feature
+ehttp = { version = "0.3.0", optional = true, default-features = false }

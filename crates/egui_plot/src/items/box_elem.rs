@@ -1,8 +1,9 @@
-use crate::emath::NumExt;
-use crate::epaint::{Color32, RectShape, Rounding, Shape, Stroke};
+use egui::emath::NumExt as _;
+use egui::epaint::{Color32, RectShape, Rounding, Shape, Stroke};
+
+use crate::{BoxPlot, Cursor, PlotPoint, PlotTransform};
 
 use super::{add_rulers_and_text, highlighted_color, Orientation, PlotConfig, RectElement};
-use crate::plot::{BoxPlot, Cursor, PlotPoint, PlotTransform};
 
 /// Contains the values of a single box in a box plot.
 #[derive(Clone, Debug, PartialEq)]
@@ -150,12 +151,7 @@ impl BoxElem {
             &self.point_at(self.argument - self.box_width / 2.0, self.spread.quartile1),
             &self.point_at(self.argument + self.box_width / 2.0, self.spread.quartile3),
         );
-        let rect = Shape::Rect(RectShape {
-            rect,
-            rounding: Rounding::none(),
-            fill,
-            stroke,
-        });
+        let rect = Shape::Rect(RectShape::new(rect, Rounding::ZERO, fill, stroke));
         shapes.push(rect);
 
         let line_between = |v1, v2| {

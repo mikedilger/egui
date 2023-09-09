@@ -155,7 +155,7 @@ impl BackendPanel {
         // On web, the browser controls `pixels_per_point`.
         let integration_controls_pixels_per_point = frame.is_web();
         if !integration_controls_pixels_per_point {
-            self.pixels_per_point_ui(ui, &frame.info());
+            self.pixels_per_point_ui(ui, frame.info());
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -232,8 +232,7 @@ impl BackendPanel {
                 if ui
                     .add_enabled(enabled, egui::Button::new("Reset"))
                     .on_hover_text(format!(
-                        "Reset scale to native value ({:.1})",
-                        native_pixels_per_point
+                        "Reset scale to native value ({native_pixels_per_point:.1})"
                     ))
                     .clicked()
                 {
@@ -441,7 +440,7 @@ impl EguiWindows {
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for event in output_event_history {
-                            ui.label(format!("{:?}", event));
+                            ui.label(format!("{event:?}"));
                         }
                     });
             });
@@ -452,10 +451,13 @@ impl EguiWindows {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn call_after_delay(delay: std::time::Duration, f: impl FnOnce() + Send + 'static) {
-    std::thread::spawn(move || {
-        std::thread::sleep(delay);
-        f();
-    });
+    std::thread::Builder::new()
+        .name("call_after_delay".to_owned())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            f();
+        })
+        .unwrap();
 }
 
 #[cfg(target_arch = "wasm32")]

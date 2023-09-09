@@ -1,4 +1,5 @@
 use crate::{textures::TextureOptions, Color32};
+use std::sync::Arc;
 
 /// An image stored in RAM.
 ///
@@ -11,7 +12,7 @@ use crate::{textures::TextureOptions, Color32};
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum ImageData {
     /// RGBA image.
-    Color(ColorImage),
+    Color(Arc<ColorImage>),
 
     /// Used for the font texture.
     Font(FontImage),
@@ -107,6 +108,15 @@ impl ColorImage {
             .chunks_exact(4)
             .map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
             .collect();
+        Self { size, pixels }
+    }
+
+    /// Create a [`ColorImage`] from flat opaque gray data.
+    ///
+    /// Panics if `size[0] * size[1] != gray.len()`.
+    pub fn from_gray(size: [usize; 2], gray: &[u8]) -> Self {
+        assert_eq!(size[0] * size[1], gray.len());
+        let pixels = gray.iter().map(|p| Color32::from_gray(*p)).collect();
         Self { size, pixels }
     }
 
@@ -217,6 +227,13 @@ impl std::ops::IndexMut<(usize, usize)> for ColorImage {
 impl From<ColorImage> for ImageData {
     #[inline(always)]
     fn from(image: ColorImage) -> Self {
+        Self::Color(Arc::new(image))
+    }
+}
+
+impl From<Arc<ColorImage>> for ImageData {
+    #[inline]
+    fn from(image: Arc<ColorImage>) -> Self {
         Self::Color(image)
     }
 }

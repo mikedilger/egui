@@ -118,7 +118,7 @@ pub trait App {
     ///
     /// Can be used from web to interact or other external context.
     ///
-    /// You need to implement this if you want to be able to access the application from JS using [`crate::web::backend::AppRunner`].
+    /// You need to implement this if you want to be able to access the application from JS using [`crate::WebRunner::app_mut`].
     ///
     /// This is needed because downcasting `Box<dyn App>` -> `Box<dyn Any>` to get &`ConcreteApp` is not simple in current rust.
     ///
@@ -139,13 +139,8 @@ pub trait App {
     /// Only called when the "persistence" feature is enabled.
     ///
     /// On web the state is stored to "Local Storage".
-    /// On native the path is picked using [`directories_next::ProjectDirs::data_dir`](https://docs.rs/directories-next/2.0.0/directories_next/struct.ProjectDirs.html#method.data_dir) which is:
-    /// * Linux:   `/home/UserName/.local/share/APP_ID`
-    /// * macOS:   `/Users/UserName/Library/Application Support/APP_ID`
-    /// * Windows: `C:\Users\UserName\AppData\Roaming\APP_ID`
     ///
-    /// where `APP_ID` is determined by either [`NativeOptions::app_id`] or
-    /// the title argument to [`crate::run_native`].
+    /// On native the path is picked using [`crate::storage_dir`].
     fn save(&mut self, _storage: &mut dyn Storage) {}
 
     /// Called when the user attempts to close the desktop window and/or quit the application.
@@ -422,16 +417,13 @@ pub struct NativeOptions {
 
     /// The application id, used for determining the folder to persist the app to.
     ///
-    /// On native the path is picked using [`directories_next::ProjectDirs::data_dir`](https://docs.rs/directories-next/2.0.0/directories_next/struct.ProjectDirs.html#method.data_dir) which is:
-    /// * Linux:   `/home/UserName/.local/share/APP_ID`
-    /// * macOS:   `/Users/UserName/Library/Application Support/APP_ID`
-    /// * Windows: `C:\Users\UserName\AppData\Roaming\APP_ID`
+    /// On native the path is picked using [`crate::storage_dir`].
     ///
     /// If you don't set [`Self::app_id`], the title argument to [`crate::run_native`]
-    /// will be used instead.
+    /// will be used as app id instead.
     ///
     /// ### On Wayland
-    /// On Wauland this sets the Application ID for the window.
+    /// On Wayland this sets the Application ID for the window.
     ///
     /// The application ID is used in several places of the compositor, e.g. for
     /// grouping windows of the same application. It is also important for
@@ -770,8 +762,8 @@ impl Frame {
     }
 
     /// Information about the integration.
-    pub fn info(&self) -> IntegrationInfo {
-        self.info.clone()
+    pub fn info(&self) -> &IntegrationInfo {
+        &self.info
     }
 
     /// A place where you can store custom data in a way that persists when you restart the app.

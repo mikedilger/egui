@@ -10,11 +10,15 @@ pub use usvg::FitTo;
 /// Use the `svg` and `image` features to enable more constructors.
 pub struct RetainedImage {
     debug_name: String,
+
     size: [usize; 2],
+
     /// Cleared once [`Self::texture`] has been loaded.
     image: Mutex<egui::ColorImage>,
+
     /// Lazily loaded when we have an egui context.
     texture: Mutex<Option<egui::TextureHandle>>,
+
     options: TextureOptions,
 }
 
@@ -199,6 +203,7 @@ use egui::ColorImage;
 /// On invalid image or unsupported image format.
 #[cfg(feature = "image")]
 pub fn load_image_bytes(image_bytes: &[u8]) -> Result<egui::ColorImage, String> {
+    crate::profile_function!();
     let image = image::load_from_memory(image_bytes).map_err(|err| err.to_string())?;
     let size = [image.width() as _, image.height() as _];
     let image_buffer = image.to_rgba8();
@@ -231,6 +236,7 @@ pub fn load_svg_bytes_with_size(
     svg_bytes: &[u8],
     fit_to: FitTo,
 ) -> Result<egui::ColorImage, String> {
+    crate::profile_function!();
     let opt = usvg::Options::default();
 
     let rtree = usvg::Tree::from_data(svg_bytes, &opt).map_err(|err| err.to_string())?;
@@ -254,7 +260,7 @@ pub fn load_svg_bytes_with_size(
     };
 
     let mut pixmap = tiny_skia::Pixmap::new(w, h)
-        .ok_or_else(|| format!("Failed to create SVG Pixmap of size {}x{}", w, h))?;
+        .ok_or_else(|| format!("Failed to create SVG Pixmap of size {w}x{h}"))?;
 
     resvg::render(&rtree, fit_to, Default::default(), pixmap.as_mut())
         .ok_or_else(|| "Failed to render SVG".to_owned())?;

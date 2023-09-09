@@ -1,9 +1,9 @@
 //! Contains items that can be added to a plot.
+#![allow(clippy::type_complexity)] // TODO(emilk): simplify some of the callback types with type aliases
 
 use std::ops::RangeInclusive;
 
-use epaint::util::FloatOrd;
-use epaint::Mesh;
+use epaint::{emath::Rot2, util::FloatOrd, Mesh};
 
 use crate::*;
 
@@ -188,10 +188,10 @@ impl PlotItem for HLine {
 
         // Round to minimize aliasing:
         let points = vec![
-            ui.ctx().round_pos_to_pixels(
+            ui.painter().round_pos_to_pixels(
                 transform.position_from_point(&PlotPoint::new(transform.bounds().min[0], *y)),
             ),
-            ui.ctx().round_pos_to_pixels(
+            ui.painter().round_pos_to_pixels(
                 transform.position_from_point(&PlotPoint::new(transform.bounds().max[0], *y)),
             ),
         ];
@@ -304,10 +304,10 @@ impl PlotItem for VLine {
 
         // Round to minimize aliasing:
         let points = vec![
-            ui.ctx().round_pos_to_pixels(
+            ui.painter().round_pos_to_pixels(
                 transform.position_from_point(&PlotPoint::new(*x, transform.bounds().min[1])),
             ),
-            ui.ctx().round_pos_to_pixels(
+            ui.painter().round_pos_to_pixels(
                 transform.position_from_point(&PlotPoint::new(*x, transform.bounds().max[1])),
             ),
         ];
@@ -517,7 +517,7 @@ pub struct Polygon {
     pub(super) stroke: Stroke,
     pub(super) name: String,
     pub(super) highlight: bool,
-    pub(super) fill_alpha: f32,
+    pub(super) fill_color: Option<Color32>,
     pub(super) style: LineStyle,
 }
 
@@ -528,7 +528,7 @@ impl Polygon {
             stroke: Stroke::new(1.0, Color32::TRANSPARENT),
             name: Default::default(),
             highlight: false,
-            fill_alpha: DEFAULT_FILL_ALPHA,
+            fill_color: None,
             style: LineStyle::Solid,
         }
     }
@@ -552,15 +552,21 @@ impl Polygon {
         self
     }
 
-    /// Stroke color. Default is `Color32::TRANSPARENT` which means a color will be auto-assigned.
+    #[deprecated = "Use `fill_color`."]
+    #[allow(unused, clippy::needless_pass_by_value)]
     pub fn color(mut self, color: impl Into<Color32>) -> Self {
-        self.stroke.color = color.into();
         self
     }
 
-    /// Alpha of the filled area.
-    pub fn fill_alpha(mut self, alpha: impl Into<f32>) -> Self {
-        self.fill_alpha = alpha.into();
+    #[deprecated = "Use `fill_color`."]
+    #[allow(unused, clippy::needless_pass_by_value)]
+    pub fn fill_alpha(mut self, _alpha: impl Into<f32>) -> Self {
+        self
+    }
+
+    /// Fill color. Defaults to the stroke color with added transparency.
+    pub fn fill_color(mut self, color: impl Into<Color32>) -> Self {
+        self.fill_color = Some(color.into());
         self
     }
 
@@ -589,14 +595,10 @@ impl PlotItem for Polygon {
             series,
             stroke,
             highlight,
-            mut fill_alpha,
+            fill_color,
             style,
             ..
         } = self;
-
-        if *highlight {
-            fill_alpha = (2.0 * fill_alpha).at_most(1.0);
-        }
 
         let mut values_tf: Vec<_> = series
             .points()
@@ -604,9 +606,9 @@ impl PlotItem for Polygon {
             .map(|v| transform.position_from_point(v))
             .collect();
 
-        let fill = Rgba::from(stroke.color).to_opaque().multiply(fill_alpha);
+        let fill_color = fill_color.unwrap_or(stroke.color.linear_multiply(DEFAULT_FILL_ALPHA));
 
-        let shape = Shape::convex_polygon(values_tf.clone(), fill, Stroke::NONE);
+        let shape = Shape::convex_polygon(values_tf.clone(), fill_color, Stroke::NONE);
         shapes.push(shape);
         values_tf.push(*values_tf.first().unwrap());
         style.style_line(values_tf, *stroke, *highlight, shapes);
@@ -760,15 +762,22 @@ impl PlotItem for Text {
 /// A set of points.
 pub struct Points {
     pub(super) series: PlotPoints,
+
     pub(super) shape: MarkerShape,
+
     /// Color of the marker. `Color32::TRANSPARENT` means that it will be picked automatically.
     pub(super) color: Color32,
+
     /// Whether to fill the marker. Does not apply to all types.
     pub(super) filled: bool,
+
     /// The maximum extent of the marker from its center.
     pub(super) radius: f32,
+
     pub(super) name: String,
+
     pub(super) highlight: bool,
+
     pub(super) stems: Option<f32>,
 }
 
@@ -997,6 +1006,7 @@ impl PlotItem for Points {
 pub struct Arrows {
     pub(super) origins: PlotPoints,
     pub(super) tips: PlotPoints,
+    pub(super) tip_length: Option<f32>,
     pub(super) color: Color32,
     pub(super) name: String,
     pub(super) highlight: bool,
@@ -1007,6 +1017,7 @@ impl Arrows {
         Self {
             origins: origins.into(),
             tips: tips.into(),
+            tip_length: None,
             color: Color32::TRANSPARENT,
             name: Default::default(),
             highlight: false,
@@ -1016,6 +1027,12 @@ impl Arrows {
     /// Highlight these arrows in the plot.
     pub fn highlight(mut self, highlight: bool) -> Self {
         self.highlight = highlight;
+        self
+    }
+
+    /// Set the length of the arrow tips
+    pub fn tip_length(mut self, tip_length: f32) -> Self {
+        self.tip_length = Some(tip_length);
         self
     }
 
@@ -1044,6 +1061,7 @@ impl PlotItem for Arrows {
         let Self {
             origins,
             tips,
+            tip_length,
             color,
             highlight,
             ..
@@ -1062,7 +1080,11 @@ impl PlotItem for Arrows {
             .for_each(|(origin, tip)| {
                 let vector = tip - origin;
                 let rot = Rot2::from_angle(std::f32::consts::TAU / 10.0);
-                let tip_length = vector.length() / 4.0;
+                let tip_length = if let Some(tip_length) = tip_length {
+                    *tip_length
+                } else {
+                    vector.length() / 4.0
+                };
                 let tip = origin + vector;
                 let dir = vector.normalized();
                 shapes.push(Shape::line_segment([origin, tip], stroke));
@@ -1115,6 +1137,7 @@ pub struct PlotImage {
     pub(super) texture_id: TextureId,
     pub(super) uv: Rect,
     pub(super) size: Vec2,
+    pub(crate) rotation: f64,
     pub(super) bg_fill: Color32,
     pub(super) tint: Color32,
     pub(super) highlight: bool,
@@ -1135,6 +1158,7 @@ impl PlotImage {
             texture_id: texture_id.into(),
             uv: Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
             size: size.into(),
+            rotation: 0.0,
             bg_fill: Default::default(),
             tint: Color32::WHITE,
         }
@@ -1175,12 +1199,19 @@ impl PlotImage {
         self.name = name.to_string();
         self
     }
+
+    /// Rotate the image counter-clockwise around its center by an angle in radians.
+    pub fn rotate(mut self, angle: f64) -> Self {
+        self.rotation = angle;
+        self
+    }
 }
 
 impl PlotItem for PlotImage {
     fn shapes(&self, ui: &mut Ui, transform: &PlotTransform, shapes: &mut Vec<Shape>) {
         let Self {
             position,
+            rotation,
             texture_id,
             uv,
             size,
@@ -1189,28 +1220,40 @@ impl PlotItem for PlotImage {
             highlight,
             ..
         } = self;
-        let rect = {
+        let image_screen_rect = {
             let left_top = PlotPoint::new(
-                position.x as f32 - size.x / 2.0,
-                position.y as f32 - size.y / 2.0,
+                position.x - 0.5 * size.x as f64,
+                position.y - 0.5 * size.y as f64,
             );
             let right_bottom = PlotPoint::new(
-                position.x as f32 + size.x / 2.0,
-                position.y as f32 + size.y / 2.0,
+                position.x + 0.5 * size.x as f64,
+                position.y + 0.5 * size.y as f64,
             );
-            let left_top_tf = transform.position_from_point(&left_top);
-            let right_bottom_tf = transform.position_from_point(&right_bottom);
-            Rect::from_two_pos(left_top_tf, right_bottom_tf)
+            let left_top_screen = transform.position_from_point(&left_top);
+            let right_bottom_screen = transform.position_from_point(&right_bottom);
+            Rect::from_two_pos(left_top_screen, right_bottom_screen)
         };
-        Image::new(*texture_id, *size)
+        let screen_rotation = -*rotation as f32;
+        Image::new(*texture_id, image_screen_rect.size())
             .bg_fill(*bg_fill)
             .tint(*tint)
             .uv(*uv)
-            .paint_at(ui, rect);
+            .rotate(screen_rotation, Vec2::splat(0.5))
+            .paint_at(ui, image_screen_rect);
         if *highlight {
-            shapes.push(Shape::rect_stroke(
-                rect,
-                0.0,
+            let center = image_screen_rect.center();
+            let rotation = Rot2::from_angle(screen_rotation);
+            let outline = [
+                image_screen_rect.right_bottom(),
+                image_screen_rect.right_top(),
+                image_screen_rect.left_top(),
+                image_screen_rect.left_bottom(),
+            ]
+            .iter()
+            .map(|point| center + rotation * (*point - center))
+            .collect();
+            shapes.push(Shape::closed_line(
+                outline,
                 Stroke::new(1.0, ui.visuals().strong_text_color()),
             ));
         }
@@ -1261,8 +1304,10 @@ pub struct BarChart {
     pub(super) bars: Vec<Bar>,
     pub(super) default_color: Color32,
     pub(super) name: String,
+
     /// A custom element formatter
     pub(super) element_formatter: Option<Box<dyn Fn(&Bar, &BarChart) -> String>>,
+
     highlight: bool,
 }
 
@@ -1431,8 +1476,10 @@ pub struct BoxPlot {
     pub(super) boxes: Vec<BoxElem>,
     pub(super) default_color: Color32,
     pub(super) name: String,
+
     /// A custom element formatter
     pub(super) element_formatter: Option<Box<dyn Fn(&BoxElem, &BoxPlot) -> String>>,
+
     highlight: bool,
 }
 
@@ -1692,7 +1739,7 @@ pub(super) fn rulers_at_value(
     let mut prefix = String::new();
 
     if !name.is_empty() {
-        prefix = format!("{}\n", name);
+        prefix = format!("{name}\n");
     }
 
     let text = {

@@ -1,9 +1,11 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use super::{FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, Row, RowVisuals};
-use crate::{Color32, Mesh, Stroke, Vertex};
 use emath::*;
+
+use crate::{Color32, Mesh, Stroke, Vertex};
+
+use super::{FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, Row, RowVisuals};
 
 // ----------------------------------------------------------------------------
 
@@ -54,6 +56,20 @@ struct Paragraph {
 /// In most cases you should use [`crate::Fonts::layout_job`] instead
 /// since that memoizes the input, making subsequent layouting of the same text much faster.
 pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
+    if job.wrap.max_rows == 0 {
+        // Early-out: no text
+        return Galley {
+            job,
+            rows: Default::default(),
+            rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
+            mesh_bounds: Rect::NOTHING,
+            num_vertices: 0,
+            num_indices: 0,
+            pixels_per_point: fonts.pixels_per_point(),
+            elided: true,
+        };
+    }
+
     let mut paragraphs = vec![Paragraph::default()];
     for (section_index, section) in job.sections.iter().enumerate() {
         layout_section(fonts, &job, section_index as u32, section, &mut paragraphs);
@@ -61,7 +77,8 @@ pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
 
     let point_scale = PointScale::new(fonts.pixels_per_point());
 
-    let mut rows = rows_from_paragraphs(fonts, paragraphs, &job);
+    let mut elided = false;
+    let mut rows = rows_from_paragraphs(fonts, paragraphs, &job, &mut elided);
 
     let justify = job.justify && job.wrap.max_width.is_finite();
 
@@ -80,7 +97,7 @@ pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
         }
     }
 
-    galley_from_rows(point_scale, job, rows)
+    galley_from_rows(point_scale, job, rows, elided)
 }
 
 fn layout_section(
@@ -96,11 +113,15 @@ fn layout_section(
         format,
     } = section;
     let font = fonts.font(&format.font_id);
-    let font_height = font.row_height();
+    let line_height = section
+        .format
+        .line_height
+        .unwrap_or_else(|| font.row_height());
+    let extra_letter_spacing = section.format.extra_letter_spacing;
 
     let mut paragraph = out_paragraphs.last_mut().unwrap();
     if paragraph.glyphs.is_empty() {
-        paragraph.empty_paragraph_height = font_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
+        paragraph.empty_paragraph_height = line_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
     }
 
     // TODO(bu5hm4nn): in a label widget, `leading_space` is used to adjust for existing text in a screen row,
@@ -114,19 +135,20 @@ fn layout_section(
         if job.break_on_newline && chr == '\n' {
             out_paragraphs.push(Paragraph::default());
             paragraph = out_paragraphs.last_mut().unwrap();
-            paragraph.empty_paragraph_height = font_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
+            paragraph.empty_paragraph_height = line_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
         } else {
             let (font_impl, glyph_info) = font.glyph_info_and_font_impl(chr);
             if let Some(font_impl) = font_impl {
                 if let Some(last_glyph_id) = last_glyph_id {
                     paragraph.cursor_x += font_impl.pair_kerning(last_glyph_id, glyph_info.id);
+                    paragraph.cursor_x += extra_letter_spacing;
                 }
             }
 
             paragraph.glyphs.push(Glyph {
                 chr,
                 pos: pos2(paragraph.cursor_x, f32::NAN),
-                size: vec2(glyph_info.advance_width, glyph_info.row_height),
+                size: vec2(glyph_info.advance_width, line_height),
                 ascent: glyph_info.ascent,
                 uv_rect: glyph_info.uv_rect,
                 section_index,
@@ -148,12 +170,18 @@ fn rows_from_paragraphs(
     fonts: &mut FontsImpl,
     paragraphs: Vec<Paragraph>,
     job: &LayoutJob,
+    elided: &mut bool,
 ) -> Vec<Row> {
     let num_paragraphs = paragraphs.len();
 
     let mut rows = vec![];
 
     for (i, paragraph) in paragraphs.into_iter().enumerate() {
+        if job.wrap.max_rows <= rows.len() {
+            *elided = true;
+            break;
+        }
+
         let is_last_paragraph = (i + 1) == num_paragraphs;
 
         if paragraph.glyphs.is_empty() {
@@ -169,7 +197,7 @@ fn rows_from_paragraphs(
         } else {
             let paragraph_max_x = paragraph.glyphs.last().unwrap().max_x();
             if paragraph_max_x <= job.wrap.max_width {
-                // early-out optimization
+                // Early-out optimization: the whole paragraph fits on one row.
                 let paragraph_min_x = paragraph.glyphs[0].pos.x;
                 rows.push(Row {
                     glyphs: paragraph.glyphs,
@@ -178,7 +206,7 @@ fn rows_from_paragraphs(
                     ends_with_newline: !is_last_paragraph,
                 });
             } else {
-                line_break(fonts, &paragraph, job, &mut rows);
+                line_break(fonts, &paragraph, job, &mut rows, elided);
                 rows.last_mut().unwrap().ends_with_newline = !is_last_paragraph;
             }
         }
@@ -192,6 +220,7 @@ fn line_break(
     paragraph: &Paragraph,
     job: &LayoutJob,
     out_rows: &mut Vec<Row>,
+    elided: &mut bool,
 ) {
     // Keeps track of good places to insert row break if we exceed `wrap_width`.
     let mut row_break_candidates = RowBreakCandidates::default();
@@ -199,20 +228,33 @@ fn line_break(
     let mut first_row_indentation = paragraph.glyphs[0].pos.x;
     let mut row_start_x = 0.0;
     let mut row_start_idx = 0;
-    let mut non_empty_rows = 0;
 
     for i in 0..paragraph.glyphs.len() {
         let potential_row_width = paragraph.glyphs[i].max_x() - row_start_x - first_row_indentation;
 
-        if job.wrap.max_rows > 0 && non_empty_rows >= job.wrap.max_rows {
+        if job.wrap.max_rows <= out_rows.len() {
+            *elided = true;
             break;
         }
 
-        // (bu5hm4nn): we want to actually allow as much text as possible on the first line so
-        // we don't need a special case for the first row, but we need to subtract
-        // the first_row_indentation from the allowed max width
-        if potential_row_width > (job.wrap.max_width - first_row_indentation) {
-            if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere) {
+        if job.wrap.max_width < potential_row_width {
+            // Row break:
+
+            if first_row_indentation > 0.0
+                && !row_break_candidates.has_good_candidate(job.wrap.break_anywhere)
+            {
+                // Allow the first row to be completely empty, because we know there will be more space on the next row:
+                // TODO(emilk): this records the height of this first row as zero, though that is probably fine since first_row_indentation usually comes with a first_row_min_height.
+                out_rows.push(Row {
+                    glyphs: vec![],
+                    visuals: Default::default(),
+                    rect: rect_from_x_range(first_row_indentation..=first_row_indentation),
+                    ends_with_newline: false,
+                });
+                row_start_x += first_row_indentation;
+                first_row_indentation = 0.0;
+            } else if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere)
+            {
                 let glyphs: Vec<Glyph> = paragraph.glyphs[row_start_idx..=last_kept_index]
                     .iter()
                     .copied()
@@ -232,15 +274,10 @@ fn line_break(
                     ends_with_newline: false,
                 });
 
+                // Start a new row:
                 row_start_idx = last_kept_index + 1;
                 row_start_x = paragraph.glyphs[row_start_idx].pos.x;
                 row_break_candidates = Default::default();
-                non_empty_rows += 1;
-
-                // (bu5hm4nn) first row indentation gets consumed the first time it's used
-                if first_row_indentation > 0.0 {
-                    first_row_indentation = 0.0
-                }
             } else {
                 // Found no place to break, so we have to overrun wrap_width.
             }
@@ -250,9 +287,12 @@ fn line_break(
     }
 
     if row_start_idx < paragraph.glyphs.len() {
-        if job.wrap.max_rows > 0 && non_empty_rows == job.wrap.max_rows {
+        // Final row of text:
+
+        if job.wrap.max_rows <= out_rows.len() {
             if let Some(last_row) = out_rows.last_mut() {
                 replace_last_glyph_with_overflow_character(fonts, job, last_row);
+                *elided = true;
             }
         } else {
             let glyphs: Vec<Glyph> = paragraph.glyphs[row_start_idx..]
@@ -277,14 +317,14 @@ fn line_break(
     }
 }
 
+/// Trims the last glyphs in the row and replaces it with an overflow character (e.g. `…`).
 fn replace_last_glyph_with_overflow_character(
     fonts: &mut FontsImpl,
     job: &LayoutJob,
     row: &mut Row,
 ) {
-    let overflow_character = match job.wrap.overflow_character {
-        Some(c) => c,
-        None => return,
+    let Some(overflow_character) = job.wrap.overflow_character else {
+        return;
     };
 
     loop {
@@ -295,8 +335,12 @@ fn replace_last_glyph_with_overflow_character(
         };
 
         let section = &job.sections[last_glyph.section_index as usize];
+        let extra_letter_spacing = section.format.extra_letter_spacing;
         let font = fonts.font(&section.format.font_id);
-        let font_height = font.row_height();
+        let line_height = section
+            .format
+            .line_height
+            .unwrap_or_else(|| font.row_height());
 
         let prev_glyph_id = prev_glyph.map(|prev_glyph| {
             let (_, prev_glyph_info) = font.glyph_info_and_font_impl(prev_glyph.chr);
@@ -305,33 +349,44 @@ fn replace_last_glyph_with_overflow_character(
 
         // undo kerning with previous glyph
         let (font_impl, glyph_info) = font.glyph_info_and_font_impl(last_glyph.chr);
-        last_glyph.pos.x -= font_impl
-            .zip(prev_glyph_id)
-            .map(|(font_impl, prev_glyph_id)| font_impl.pair_kerning(prev_glyph_id, glyph_info.id))
-            .unwrap_or_default();
+        last_glyph.pos.x -= extra_letter_spacing
+            + font_impl
+                .zip(prev_glyph_id)
+                .map(|(font_impl, prev_glyph_id)| {
+                    font_impl.pair_kerning(prev_glyph_id, glyph_info.id)
+                })
+                .unwrap_or_default();
 
         // replace the glyph
         last_glyph.chr = overflow_character;
         let (font_impl, glyph_info) = font.glyph_info_and_font_impl(last_glyph.chr);
-        last_glyph.size = vec2(glyph_info.advance_width, font_height);
+        last_glyph.size = vec2(glyph_info.advance_width, line_height);
         last_glyph.uv_rect = glyph_info.uv_rect;
+        last_glyph.ascent = glyph_info.ascent;
 
         // reapply kerning
-        last_glyph.pos.x += font_impl
-            .zip(prev_glyph_id)
-            .map(|(font_impl, prev_glyph_id)| font_impl.pair_kerning(prev_glyph_id, glyph_info.id))
-            .unwrap_or_default();
+        last_glyph.pos.x += extra_letter_spacing
+            + font_impl
+                .zip(prev_glyph_id)
+                .map(|(font_impl, prev_glyph_id)| {
+                    font_impl.pair_kerning(prev_glyph_id, glyph_info.id)
+                })
+                .unwrap_or_default();
 
-        // check if we're still within width budget
+        row.rect.max.x = last_glyph.max_x();
+
+        // check if we're within width budget
         let row_end_x = last_glyph.max_x();
         let row_start_x = row.glyphs.first().unwrap().pos.x; // if `last_mut()` returned `Some`, then so will `first()`
         let row_width = row_end_x - row_start_x;
         if row_width <= job.wrap.max_width {
-            break;
+            return; // we are done
         }
 
         row.glyphs.pop();
     }
+
+    // We failed to insert `overflow_character` without exceeding `wrap_width`.
 }
 
 fn halign_and_justify_row(
@@ -425,13 +480,18 @@ fn halign_and_justify_row(
 }
 
 /// Calculate the Y positions and tessellate the text.
-fn galley_from_rows(point_scale: PointScale, job: Arc<LayoutJob>, mut rows: Vec<Row>) -> Galley {
+fn galley_from_rows(
+    point_scale: PointScale,
+    job: Arc<LayoutJob>,
+    mut rows: Vec<Row>,
+    elided: bool,
+) -> Galley {
     let mut first_row_min_height = job.first_row_min_height;
     let mut cursor_y = 0.0;
     let mut min_x: f32 = 0.0;
     let mut max_x: f32 = 0.0;
     for row in &mut rows {
-        let mut row_height = first_row_min_height.max(row.rect.height());
+        let mut line_height = first_row_min_height.max(row.rect.height());
         let mut row_ascent = 0.0f32;
         first_row_min_height = 0.0;
 
@@ -441,10 +501,10 @@ fn galley_from_rows(point_scale: PointScale, job: Arc<LayoutJob>, mut rows: Vec<
             .iter()
             .max_by(|a, b| a.size.y.partial_cmp(&b.size.y).unwrap())
         {
-            row_height = glyph.size.y;
+            line_height = glyph.size.y;
             row_ascent = glyph.ascent;
         }
-        row_height = point_scale.round_to_pixel(row_height);
+        line_height = point_scale.round_to_pixel(line_height);
 
         // Now positions each glyph:
         for glyph in &mut row.glyphs {
@@ -460,11 +520,11 @@ fn galley_from_rows(point_scale: PointScale, job: Arc<LayoutJob>, mut rows: Vec<
         }
 
         row.rect.min.y = cursor_y;
-        row.rect.max.y = cursor_y + row_height;
+        row.rect.max.y = cursor_y + line_height;
 
         min_x = min_x.min(row.rect.min.x);
         max_x = max_x.max(row.rect.max.x);
-        cursor_y += row_height;
+        cursor_y += line_height;
         cursor_y = point_scale.round_to_pixel(cursor_y);
     }
 
@@ -486,6 +546,7 @@ fn galley_from_rows(point_scale: PointScale, job: Arc<LayoutJob>, mut rows: Vec<
     Galley {
         job,
         rows,
+        elided,
         rect,
         mesh_bounds,
         num_vertices,

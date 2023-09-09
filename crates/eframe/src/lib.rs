@@ -7,7 +7,7 @@
 //! To learn how to set up `eframe` for web and native, go to <https://github.com/emilk/eframe_template/> and follow the instructions there!
 //!
 //! In short, you implement [`App`] (especially [`App::update`]) and then
-//! call [`crate::run_native`] from your `main.rs`, and/or call `eframe::start_web` from your `lib.rs`.
+//! call [`crate::run_native`] from your `main.rs`, and/or use `eframe::WebRunner` from your `lib.rs`.
 //!
 //! ## Usage, native:
 //! ``` no_run
@@ -50,7 +50,7 @@
 //! #[derive(Clone)]
 //! #[wasm_bindgen]
 //! pub struct WebHandle {
-//!     runner: WebRunner,
+//!     runner: eframe::WebRunner,
 //! }
 //!
 //! # #[cfg(target_arch = "wasm32")]
@@ -64,7 +64,7 @@
 //!         eframe::WebLogger::init(log::LevelFilter::Debug).ok();
 //!
 //!         Self {
-//!             runner: WebRunner::new(),
+//!             runner: eframe::WebRunner::new(),
 //!         }
 //!     }
 //!
@@ -82,6 +82,7 @@
 //!
 //!     // The following are optional:
 //!
+//!     /// Shut down eframe and clean up resources.
 //!     #[wasm_bindgen]
 //!     pub fn destroy(&self) {
 //!         self.runner.destroy();
@@ -121,6 +122,7 @@
 #![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
 //!
 
+#![warn(missing_docs)] // let's keep eframe well-documented
 #![allow(clippy::needless_doctest_main)]
 
 // Re-export all useful libraries:
@@ -158,6 +160,11 @@ pub use web::{WebLogger, WebRunner};
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(feature = "glow", feature = "wgpu"))]
 mod native;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(feature = "glow", feature = "wgpu"))]
+#[cfg(feature = "persistence")]
+pub use native::file_storage::storage_dir;
 
 /// This is how you start a native (desktop) app.
 ///
@@ -272,6 +279,7 @@ pub fn run_simple_native(
     struct SimpleApp<U> {
         update_fun: U,
     }
+
     impl<U: FnMut(&egui::Context, &mut Frame)> App for SimpleApp<U> {
         fn update(&mut self, ctx: &egui::Context, frame: &mut Frame) {
             (self.update_fun)(ctx, frame);
@@ -290,23 +298,28 @@ pub fn run_simple_native(
 /// The different problems that can occur when trying to run `eframe`.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    /// An error from [`winit`].
     #[cfg(not(target_arch = "wasm32"))]
     #[error("winit error: {0}")]
     Winit(#[from] winit::error::OsError),
 
+    /// An error from [`glutin`] when using [`glow`].
     #[cfg(all(feature = "glow", not(target_arch = "wasm32")))]
     #[error("glutin error: {0}")]
     Glutin(#[from] glutin::error::Error),
 
+    /// An error from [`glutin`] when using [`glow`].
     #[cfg(all(feature = "glow", not(target_arch = "wasm32")))]
-    #[error("Found no glutin configs matching the template: {0:?}. error: {1:?}")]
+    #[error("Found no glutin configs matching the template: {0:?}. Error: {1:?}")]
     NoGlutinConfigs(glutin::config::ConfigTemplate, Box<dyn std::error::Error>),
 
+    /// An error from [`wgpu`].
     #[cfg(feature = "wgpu")]
     #[error("WGPU error: {0}")]
     Wgpu(#[from] egui_wgpu::WgpuError),
 }
 
+/// Short for `Result<T, eframe::Error>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
 // ---------------------------------------------------------------------------

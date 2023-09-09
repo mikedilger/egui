@@ -53,7 +53,7 @@ pub struct EventResponse {
 
 /// Handles the integration between egui and winit.
 pub struct State {
-    start_time: instant::Instant,
+    start_time: web_time::Instant,
     egui_input: egui::RawInput,
     pointer_pos_in_points: Option<egui::Pos2>,
     any_pointer_button_down: bool,
@@ -84,10 +84,6 @@ pub struct State {
 
 impl State {
     /// Construct a new instance
-    ///
-    /// # Safety
-    ///
-    /// The returned `State` must not outlive the input `display_target`.
     pub fn new(display_target: &dyn HasRawDisplayHandle) -> Self {
         let egui_input = egui::RawInput {
             focused: false, // winit will tell us when we have focus
@@ -95,7 +91,7 @@ impl State {
         };
 
         Self {
-            start_time: instant::Instant::now(),
+            start_time: web_time::Instant::now(),
             egui_input,
             pointer_pos_in_points: None,
             any_pointer_button_down: false,
@@ -307,6 +303,7 @@ impl State {
             }
             WindowEvent::KeyboardInput { input, .. } => {
                 self.on_keyboard_input(input);
+                // When pressing the Tab key, egui focuses the first focusable element, hence Tab always consumes.
                 let consumed = egui_ctx.wants_keyboard_input()
                     || input.virtual_keycode == Some(winit::event::VirtualKeyCode::Tab);
                 EventResponse {
@@ -440,7 +437,7 @@ impl State {
                             id: egui::TouchId(0),
                             phase: egui::TouchPhase::Start,
                             pos,
-                            force: 0.0,
+                            force: None,
                         });
                     } else {
                         self.any_pointer_button_down = false;
@@ -452,7 +449,7 @@ impl State {
                             id: egui::TouchId(0),
                             phase: egui::TouchPhase::End,
                             pos,
-                            force: 0.0,
+                            force: None,
                         });
                     };
                 }
@@ -478,7 +475,7 @@ impl State {
                     id: egui::TouchId(0),
                     phase: egui::TouchPhase::Move,
                     pos: pos_in_points,
-                    force: 0.0,
+                    force: None,
                 });
             }
         } else {
@@ -504,13 +501,13 @@ impl State {
                 touch.location.y as f32 / self.pixels_per_point(),
             ),
             force: match touch.force {
-                Some(winit::event::Force::Normalized(force)) => force as f32,
+                Some(winit::event::Force::Normalized(force)) => Some(force as f32),
                 Some(winit::event::Force::Calibrated {
                     force,
                     max_possible_force,
                     ..
-                }) => (force / max_possible_force) as f32,
-                None => 0_f32,
+                }) => Some((force / max_possible_force) as f32),
+                None => None,
             },
         });
         // If we're not yet translating a touch or we're translating this very
@@ -769,7 +766,7 @@ fn translate_virtual_key_code(key: winit::event::VirtualKeyCode) -> Option<egui:
         VirtualKeyCode::Escape => Key::Escape,
         VirtualKeyCode::Tab => Key::Tab,
         VirtualKeyCode::Back => Key::Backspace,
-        VirtualKeyCode::Return => Key::Enter,
+        VirtualKeyCode::Return | VirtualKeyCode::NumpadEnter => Key::Enter,
         VirtualKeyCode::Space => Key::Space,
 
         VirtualKeyCode::Insert => Key::Insert,
@@ -779,10 +776,12 @@ fn translate_virtual_key_code(key: winit::event::VirtualKeyCode) -> Option<egui:
         VirtualKeyCode::PageUp => Key::PageUp,
         VirtualKeyCode::PageDown => Key::PageDown,
 
-        VirtualKeyCode::Minus => Key::Minus,
+        VirtualKeyCode::Minus | VirtualKeyCode::NumpadSubtract => Key::Minus,
         // Using Mac the key with the Plus sign on it is reported as the Equals key
         // (with both English and Swedish keyboard).
-        VirtualKeyCode::Equals => Key::PlusEquals,
+        VirtualKeyCode::Equals | VirtualKeyCode::Plus | VirtualKeyCode::NumpadAdd => {
+            Key::PlusEquals
+        }
 
         VirtualKeyCode::Key0 | VirtualKeyCode::Numpad0 => Key::Num0,
         VirtualKeyCode::Key1 | VirtualKeyCode::Numpad1 => Key::Num1,

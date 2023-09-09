@@ -49,11 +49,6 @@ pub struct GlyphInfo {
     /// Unit: points.
     pub ascent: f32,
 
-    /// row height computed from the font metrics.
-    ///
-    /// Unit: points.
-    pub row_height: f32,
-
     /// Texture coordinates.
     pub uv_rect: UvRect,
 }
@@ -65,7 +60,6 @@ impl Default for GlyphInfo {
             id: ab_glyph::GlyphId(0),
             advance_width: 0.0,
             ascent: 0.0,
-            row_height: 0.0,
             uv_rect: Default::default(),
         }
     }
@@ -78,11 +72,15 @@ impl Default for GlyphInfo {
 pub struct FontImpl {
     name: String,
     ab_glyph_font: ab_glyph::FontArc,
+
     /// Maximum character height
     scale_in_pixels: u32,
+
     height_in_points: f32,
+
     // move each character by this much (hack)
     y_offset: f32,
+
     ascent: f32,
     pixels_per_point: f32,
     glyph_info_cache: RwLock<ahash::HashMap<char, GlyphInfo>>, // TODO(emilk): standard Mutex
@@ -246,7 +244,7 @@ impl FontImpl {
             / self.pixels_per_point
     }
 
-    /// Height of one row of text. In points
+    /// Height of one row of text in points.
     #[inline(always)]
     pub fn row_height(&self) -> f32 {
         self.height_in_points
@@ -308,7 +306,6 @@ impl FontImpl {
             id: glyph_id,
             advance_width: advance_width_in_points,
             ascent: self.ascent,
-            row_height: self.row_height(),
             uv_rect,
         }
     }
@@ -320,8 +317,10 @@ type FontIndex = usize;
 /// Wrapper over multiple [`FontImpl`] (e.g. a primary + fallbacks for emojis)
 pub struct Font {
     fonts: Vec<Arc<FontImpl>>,
+
     /// Lazily calculated.
     characters: Option<BTreeSet<char>>,
+
     replacement_glyph: (FontIndex, GlyphInfo),
     pixels_per_point: f32,
     row_height: f32,
@@ -361,8 +360,7 @@ impl Font {
             .or_else(|| slf.glyph_info_no_cache_or_fallback(FALLBACK_REPLACEMENT_CHAR))
             .unwrap_or_else(|| {
                 panic!(
-                    "Failed to find replacement characters {:?} or {:?}",
-                    PRIMARY_REPLACEMENT_CHAR, FALLBACK_REPLACEMENT_CHAR
+                    "Failed to find replacement characters {PRIMARY_REPLACEMENT_CHAR:?} or {FALLBACK_REPLACEMENT_CHAR:?}"
                 )
             });
         slf.replacement_glyph = replacement_glyph;

@@ -54,6 +54,11 @@ impl State {
     pub fn store(self, ctx: &Context, id: Id) {
         ctx.data_mut(|d| d.insert_persisted(id, self));
     }
+
+    /// Get the current kinetic scrolling velocity.
+    pub fn velocity(&self) -> Vec2 {
+        self.vel
+    }
 }
 
 pub struct ScrollAreaOutput<R> {
@@ -357,16 +362,22 @@ struct Prepared {
     state: State,
     has_bar: [bool; 2],
     auto_shrink: [bool; 2],
+
     /// How much horizontal and vertical space are used up by the
     /// width of the vertical bar, and the height of the horizontal bar?
     current_bar_use: Vec2,
+
     scroll_bar_visibility: ScrollBarVisibility,
+
     /// Where on the screen the content is (excludes scroll bars).
     inner_rect: Rect,
+
     content_ui: Ui,
+
     /// Relative coordinates: the offset and size of the view of the inner UI.
     /// `viewport.min == ZERO` means we scrolled to the top.
     viewport: Rect,
+
     scrolling_enabled: bool,
     stick_to_end: [bool; 2],
     override_scroll_delta: Option<Vec2>,
@@ -464,7 +475,6 @@ impl ScrollArea {
         {
             // Clip the content, but only when we really need to:
             let clip_rect_margin = ui.visuals().clip_rect_margin;
-            let scroll_bar_inner_margin = ui.spacing().scroll_bar_inner_margin;
             let mut content_clip_rect = ui.clip_rect();
             for d in 0..2 {
                 if has_bar[d] {
@@ -472,19 +482,12 @@ impl ScrollArea {
                         content_clip_rect.min[d] = inner_rect.min[d] - clip_rect_margin;
                         content_clip_rect.max[d] = inner_rect.max[d] + clip_rect_margin;
                     }
-
-                    if state.show_scroll[d] {
-                        // Make sure content doesn't cover scroll bars
-                        let tiny_gap = 1.0;
-                        content_clip_rect.max[1 - d] =
-                            inner_rect.max[1 - d] + scroll_bar_inner_margin - tiny_gap;
-                    }
                 } else {
                     // Nice handling of forced resizing beyond the possible:
                     content_clip_rect.max[d] = ui.clip_rect().max[d] - current_bar_use[d];
                 }
             }
-            // Make sure we din't accidentally expand the clip rect
+            // Make sure we didn't accidentally expand the clip rect
             content_clip_rect = content_clip_rect.intersect(ui.clip_rect());
             content_ui.set_clip_rect(content_clip_rect);
         }
@@ -667,8 +670,7 @@ impl Prepared {
                     let min = content_ui.min_rect().min[d];
                     let clip_rect = content_ui.clip_rect();
                     let visible_range = min..=min + clip_rect.size()[d];
-                    let start = *scroll.start();
-                    let end = *scroll.end();
+                    let (start, end) = (scroll.min, scroll.max);
                     let clip_start = clip_rect.min[d];
                     let clip_end = clip_rect.max[d];
                     let mut spacing = ui.spacing().item_spacing[d];

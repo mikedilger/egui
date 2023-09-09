@@ -25,7 +25,7 @@
 //! fn ui_counter(ui: &mut egui::Ui, counter: &mut i32) {
 //!     // Put the buttons and label on the same row:
 //!     ui.horizontal(|ui| {
-//!         if ui.button("-").clicked() {
+//!         if ui.button("−").clicked() {
 //!             *counter -= 1;
 //!         }
 //!         ui.label(counter.to_string());
@@ -92,14 +92,16 @@
 //! # });
 //! ```
 //!
-//! ## Conventions
+//! ## Coordinate system
+//! The left-top corner of the screen is `(0.0, 0.0)`,
+//! with X increasing to the right and Y increasing downwards.
 //!
-//! Conventions unless otherwise specified:
+//! `egui` uses logical _points_ as its coordinate system.
+//! Those related to physical _pixels_ by the `pixels_per_point` scale factor.
+//! For example, a high-dpi screeen can have `pixels_per_point = 2.0`,
+//! meaning there are two physical screen pixels for each logical point.
 //!
-//! * angles are in radians
-//! * `Vec2::X` is right and `Vec2::Y` is down.
-//! * `Pos2::ZERO` is left top.
-//! * Positions and sizes are measured in _points_. Each point may consist of many physical pixels.
+//! Angles are in radians, and are measured clockwise from the X-axis, which has angle=0.
 //!
 //! # Integrating with egui
 //!
@@ -312,6 +314,7 @@ mod input_state;
 pub mod introspection;
 pub mod layers;
 mod layout;
+pub mod load;
 mod memory;
 pub mod menu;
 pub mod os;
@@ -328,6 +331,8 @@ pub mod widgets;
 #[cfg(feature = "accesskit")]
 pub use accesskit;
 
+pub use ahash;
+
 pub use epaint;
 pub use epaint::ecolor;
 pub use epaint::emath;
@@ -335,7 +340,9 @@ pub use epaint::emath;
 #[cfg(feature = "color-hex")]
 pub use ecolor::hex_color;
 pub use ecolor::{Color32, Rgba};
-pub use emath::{lerp, pos2, remap, remap_clamp, vec2, Align, Align2, NumExt, Pos2, Rect, Vec2};
+pub use emath::{
+    lerp, pos2, remap, remap_clamp, vec2, Align, Align2, NumExt, Pos2, Rangef, Rect, Vec2,
+};
 pub use epaint::{
     mutex,
     text::{FontData, FontDefinitions, FontFamily, FontId, FontTweak},
@@ -348,7 +355,7 @@ pub mod text {
     pub use crate::text_edit::CCursorRange;
     pub use epaint::text::{
         cursor::CCursor, FontData, FontDefinitions, FontFamily, Fonts, Galley, LayoutJob,
-        LayoutSection, TextFormat, TAB_SIZE,
+        LayoutSection, TextFormat, TextWrapping, TAB_SIZE,
     };
 }
 
@@ -364,6 +371,7 @@ pub use {
     input_state::{InputState, MultiTouchInfo, PointerState},
     layers::{LayerId, Order},
     layout::*,
+    load::SizeHint,
     memory::{Memory, Options},
     painter::Painter,
     response::{InnerResponse, Response},
@@ -464,6 +472,9 @@ macro_rules! egui_assert {
 }
 
 // ----------------------------------------------------------------------------
+
+/// The minus character: <https://www.compart.com/en/unicode/U+2212>
+pub(crate) const MINUS_CHAR_STR: &str = "−";
 
 /// The default egui fonts supports around 1216 emojis in total.
 /// Here are some of the most useful:
@@ -572,3 +583,32 @@ pub fn __run_test_ui(mut add_contents: impl FnMut(&mut Ui)) {
 pub fn accesskit_root_id() -> Id {
     Id::new("accesskit_root")
 }
+
+// ---------------------------------------------------------------------------
+
+mod profiling_scopes {
+    #![allow(unused_macros)]
+    #![allow(unused_imports)]
+
+    /// Profiling macro for feature "puffin"
+    macro_rules! profile_function {
+        ($($arg: tt)*) => {
+            #[cfg(not(target_arch = "wasm32"))] // Disabled on web because of the coarse 1ms clock resolution there.
+            #[cfg(feature = "puffin")]
+            puffin::profile_function!($($arg)*);
+        };
+    }
+    pub(crate) use profile_function;
+
+    /// Profiling macro for feature "puffin"
+    macro_rules! profile_scope {
+        ($($arg: tt)*) => {
+            #[cfg(not(target_arch = "wasm32"))] // Disabled on web because of the coarse 1ms clock resolution there.
+            #[cfg(feature = "puffin")]
+            puffin::profile_scope!($($arg)*);
+        };
+    }
+    pub(crate) use profile_scope;
+}
+
+pub(crate) use profiling_scopes::*;

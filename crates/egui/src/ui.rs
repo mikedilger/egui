@@ -1,4 +1,4 @@
-// #![warn(missing_docs)]
+#![warn(missing_docs)] // Let's keep `Ui` well-documented.
 
 use std::hash::Hash;
 use std::sync::Arc;
@@ -249,11 +249,6 @@ impl Ui {
         self.painter.is_visible()
     }
 
-    #[deprecated = "Renamed is_visible"]
-    pub fn visible(&self) -> bool {
-        self.painter.is_visible()
-    }
-
     /// Calling `set_visible(false)` will cause all further widgets to be invisible,
     /// yet still allocate space.
     ///
@@ -281,6 +276,7 @@ impl Ui {
         }
     }
 
+    /// Read the [`Layout`].
     #[inline]
     pub fn layout(&self) -> &Layout {
         self.placer.layout()
@@ -517,15 +513,17 @@ impl Ui {
     }
 
     /// `ui.set_width_range(min..=max);` is equivalent to `ui.set_min_width(min); ui.set_max_width(max);`.
-    pub fn set_width_range(&mut self, width: std::ops::RangeInclusive<f32>) {
-        self.set_min_width(*width.start());
-        self.set_max_width(*width.end());
+    pub fn set_width_range(&mut self, width: impl Into<Rangef>) {
+        let width = width.into();
+        self.set_min_width(width.min);
+        self.set_max_width(width.max);
     }
 
     /// `ui.set_height_range(min..=max);` is equivalent to `ui.set_min_height(min); ui.set_max_height(max);`.
-    pub fn set_height_range(&mut self, height: std::ops::RangeInclusive<f32>) {
-        self.set_min_height(*height.start());
-        self.set_max_height(*height.end());
+    pub fn set_height_range(&mut self, height: impl Into<Rangef>) {
+        let height = height.into();
+        self.set_min_height(height.min);
+        self.set_max_height(height.max);
     }
 
     /// Set both the minimum and maximum width.
@@ -556,6 +554,7 @@ impl Ui {
     // Layout related measures:
 
     /// The available space at the moment, given the current cursor.
+    ///
     /// This how much more space we can take up without overflowing our parent.
     /// Shrinks as widgets allocate space and the cursor moves.
     /// A small size should be interpreted as "as little as possible".
@@ -564,19 +563,30 @@ impl Ui {
         self.placer.available_size()
     }
 
+    /// The available width at the moment, given the current cursor.
+    ///
+    /// See [`Self::available_size`] for more information.
     pub fn available_width(&self) -> f32 {
         self.available_size().x
     }
 
+    /// The available height at the moment, given the current cursor.
+    ///
+    /// See [`Self::available_size`] for more information.
     pub fn available_height(&self) -> f32 {
         self.available_size().y
     }
 
     /// In case of a wrapping layout, how much space is left on this row/column?
+    ///
+    /// If the layout does not wrap, this will return the same value as [`Self::available_size`].
     pub fn available_size_before_wrap(&self) -> Vec2 {
         self.placer.available_rect_before_wrap().size()
     }
 
+    /// In case of a wrapping layout, how much space is left on this row/column?
+    ///
+    /// If the layout does not wrap, this will return the same value as [`Self::available_size`].
     pub fn available_rect_before_wrap(&self) -> Rect {
         self.placer.available_rect_before_wrap()
     }
@@ -597,6 +607,7 @@ impl Ui {
         Id::new(self.next_auto_id_source)
     }
 
+    /// Same as `ui.next_auto_id().with(id_source)`
     pub fn auto_id_with<IdSource>(&self, id_source: IdSource) -> Id
     where
         IdSource: Hash,
@@ -604,6 +615,7 @@ impl Ui {
         Id::new(self.next_auto_id_source).with(id_source)
     }
 
+    /// Pretend like `count` widgets have been allocated.
     pub fn skip_ahead_auto_ids(&mut self, count: usize) {
         self.next_auto_id_source = self.next_auto_id_source.wrapping_add(count as u64);
     }
@@ -795,7 +807,8 @@ impl Ui {
         self.interact(rect, id, sense)
     }
 
-    pub(crate) fn advance_cursor_after_rect(&mut self, rect: Rect) -> Id {
+    /// Allocate a rect without interacting with it.
+    pub fn advance_cursor_after_rect(&mut self, rect: Rect) -> Id {
         egui_assert!(!rect.any_nan());
         let item_spacing = self.spacing().item_spacing;
         self.placer.advance_after_rects(rect, rect, item_spacing);
@@ -966,7 +979,7 @@ impl Ui {
     /// ```
     pub fn scroll_to_rect(&self, rect: Rect, align: Option<Align>) {
         for d in 0..2 {
-            let range = rect.min[d]..=rect.max[d];
+            let range = Rangef::new(rect.min[d], rect.max[d]);
             self.ctx()
                 .frame_state_mut(|state| state.scroll_target[d] = Some((range, align)));
         }
@@ -996,9 +1009,9 @@ impl Ui {
     pub fn scroll_to_cursor(&self, align: Option<Align>) {
         let target = self.next_widget_position();
         for d in 0..2 {
-            let target = target[d];
+            let target = Rangef::point(target[d]);
             self.ctx()
-                .frame_state_mut(|state| state.scroll_target[d] = Some((target..=target, align)));
+                .frame_state_mut(|state| state.scroll_target[d] = Some((target, align)));
         }
     }
 
@@ -1577,6 +1590,25 @@ impl Ui {
     pub fn image(&mut self, texture_id: impl Into<TextureId>, size: impl Into<Vec2>) -> Response {
         Image::new(texture_id, size).ui(self)
     }
+
+    /// Show an image available at the given `uri`.
+    ///
+    /// ⚠ This will do nothing unless you install some image loaders first!
+    /// The easiest way to do this is via [`egui_extras::loaders::install`](https://docs.rs/egui_extras/latest/egui_extras/loaders/fn.install.html).
+    ///
+    /// The loaders handle caching image data, sampled textures, etc. across frames, so calling this is immediate-mode safe.
+    ///
+    /// ```
+    /// # egui::__run_test_ui(|ui| {
+    /// ui.image2("file://ferris.svg");
+    /// # });
+    /// ```
+    ///
+    /// See also [`crate::Image2`] and [`crate::ImageSource`].
+    #[inline]
+    pub fn image2<'a>(&mut self, source: impl Into<ImageSource<'a>>) -> Response {
+        Image2::new(source.into()).ui(self)
+    }
 }
 
 /// # Colors
@@ -2023,11 +2055,6 @@ impl Ui {
         InnerResponse::new(inner, self.interact(rect, child_ui.id, Sense::hover()))
     }
 
-    #[deprecated = "Use ui.vertical_centered or ui.centered_and_justified"]
-    pub fn centered<R>(&mut self, add_contents: impl FnOnce(&mut Self) -> R) -> InnerResponse<R> {
-        self.vertical_centered(add_contents)
-    }
-
     /// This will make the next added widget centered and justified in the available space.
     ///
     /// Only one widget may be added to the inner `Ui`!
@@ -2207,7 +2234,7 @@ impl Ui {
         if let Some(menu_state) = self.menu_state.clone() {
             menu::submenu_button(self, menu_state, String::new(), add_contents)
         } else {
-            menu::menu_image_button(self, texture_id, image_size, add_contents)
+            menu::menu_image_button(self, ImageButton::new(texture_id, image_size), add_contents)
         }
     }
 }
@@ -2230,4 +2257,10 @@ impl Ui {
                 .debug_paint_cursor(&self.ctx().debug_painter(), text);
         }
     }
+}
+
+#[test]
+fn ui_impl_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Ui>();
 }

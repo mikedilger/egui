@@ -1,4 +1,5 @@
-// #![warn(missing_docs)]
+#![warn(missing_docs)] // Let's keep `Context` well-documented.
+
 use std::sync::Arc;
 
 use crate::{
@@ -165,6 +166,8 @@ struct ContextImpl {
     is_accesskit_enabled: bool,
     #[cfg(feature = "accesskit")]
     accesskit_node_classes: accesskit::NodeClassSet,
+
+    loaders: load::Loaders,
 }
 
 impl ContextImpl {
@@ -207,6 +210,7 @@ impl ContextImpl {
 
         #[cfg(feature = "accesskit")]
         if self.is_accesskit_enabled {
+            crate::profile_scope!("accesskit");
             use crate::frame_state::AccessKitFrameState;
             let id = crate::accesskit_root_id();
             let mut builder = accesskit::NodeBuilder::new(accesskit::Role::Window);
@@ -224,24 +228,32 @@ impl ContextImpl {
 
     /// Load fonts unless already loaded.
     fn update_fonts_mut(&mut self) {
+        crate::profile_function!();
+
         let pixels_per_point = self.input.pixels_per_point();
         let max_texture_side = self.input.max_texture_side;
 
         if let Some(font_definitions) = self.memory.new_font_definitions.take() {
+            crate::profile_scope!("Fonts::new");
             let fonts = Fonts::new(pixels_per_point, max_texture_side, font_definitions);
             self.fonts = Some(fonts);
         }
 
         let fonts = self.fonts.get_or_insert_with(|| {
             let font_definitions = FontDefinitions::default();
+            crate::profile_scope!("Fonts::new");
             Fonts::new(pixels_per_point, max_texture_side, font_definitions)
         });
 
-        fonts.begin_frame(pixels_per_point, max_texture_side);
+        {
+            crate::profile_scope!("Fonts::begin_frame");
+            fonts.begin_frame(pixels_per_point, max_texture_side);
+        }
 
         if self.memory.options.preload_font_glyphs {
+            crate::profile_scope!("preload_font_glyphs");
             // Preload the most common characters for the most common fonts.
-            // This is not very important to do, but may a few GPU operations.
+            // This is not very important to do, but may save a few GPU operations.
             for font_id in self.memory.options.style.text_styles.values() {
                 fonts.lock().fonts.font(font_id).preload_common_characters();
             }
@@ -370,6 +382,7 @@ impl Context {
     /// ```
     #[must_use]
     pub fn run(&self, new_input: RawInput, run_ui: impl FnOnce(&Context)) -> FullOutput {
+        crate::profile_function!();
         self.begin_frame(new_input);
         run_ui(self);
         self.end_frame()
@@ -393,6 +406,7 @@ impl Context {
     /// // handle full_output
     /// ```
     pub fn begin_frame(&self, new_input: RawInput) {
+        crate::profile_function!();
         self.write(|ctx| ctx.begin_frame_mut(new_input));
     }
 }
@@ -566,7 +580,7 @@ impl Context {
         }
 
         let show_error = |widget_rect: Rect, text: String| {
-            let text = format!("🔥 {}", text);
+            let text = format!("🔥 {text}");
             let color = self.style().visuals.error_fg_color;
             let painter = self.debug_painter();
             painter.rect_stroke(widget_rect, 0.0, (1.0, color));
@@ -612,10 +626,10 @@ impl Context {
         let id_str = id.short_debug_format();
 
         if prev_rect.min.distance(new_rect.min) < 4.0 {
-            show_error(new_rect, format!("Double use of {} ID {}", what, id_str));
+            show_error(new_rect, format!("Double use of {what} ID {id_str}"));
         } else {
-            show_error(prev_rect, format!("First use of {} ID {}", what, id_str));
-            show_error(new_rect, format!("Second use of {} ID {}", what, id_str));
+            show_error(prev_rect, format!("First use of {what} ID {id_str}"));
+            show_error(new_rect, format!("Second use of {what} ID {id_str}"));
         }
     }
 
@@ -1207,6 +1221,7 @@ impl Context {
     /// Call at the end of each frame.
     #[must_use]
     pub fn end_frame(&self) -> FullOutput {
+        crate::profile_function!();
         if self.input(|i| i.wants_repaint()) {
             self.request_repaint();
         }
@@ -1230,6 +1245,7 @@ impl Context {
 
         #[cfg(feature = "accesskit")]
         {
+            crate::profile_scope!("accesskit");
             let state = self.frame_state_mut(|fs| fs.accesskit_state.take());
             if let Some(state) = state {
                 let has_focus = self.input(|i| i.raw.focused);
@@ -1269,11 +1285,13 @@ impl Context {
     }
 
     fn drain_paint_lists(&self) -> Vec<ClippedShape> {
+        crate::profile_function!();
         self.write(|ctx| ctx.graphics.drain(ctx.memory.areas.order()).collect())
     }
 
     /// Tessellate the given shapes into triangle meshes.
     pub fn tessellate(&self, shapes: Vec<ClippedShape>) -> Vec<ClippedPrimitive> {
+        crate::profile_function!();
         // A tempting optimization is to reuse the tessellation from last frame if the
         // shapes are the same, but just comparing the shapes takes about 50% of the time
         // it takes to tessellate them, so it is not a worth optimization.
@@ -1293,13 +1311,16 @@ impl Context {
             };
 
             let paint_stats = PaintStats::from_shapes(&shapes);
-            let clipped_primitives = tessellator::tessellate_shapes(
-                pixels_per_point,
-                tessellation_options,
-                font_tex_size,
-                prepared_discs,
-                shapes,
-            );
+            let clipped_primitives = {
+                crate::profile_scope!("tessellator::tessellate_shapes");
+                tessellator::tessellate_shapes(
+                    pixels_per_point,
+                    tessellation_options,
+                    font_tex_size,
+                    prepared_discs,
+                    shapes,
+                )
+            };
             ctx.paint_stats = paint_stats.with_clipped_primitives(&clipped_primitives);
             clipped_primitives
         })
@@ -1388,6 +1409,14 @@ impl Context {
     /// See also [`Response::highlight`].
     pub fn highlight_widget(&self, id: Id) {
         self.frame_state_mut(|fs| fs.highlight_next_frame.insert(id));
+    }
+
+    /// Is an egui context menu open?
+    pub fn is_context_menu_open(&self) -> bool {
+        self.data(|d| {
+            d.get_temp::<crate::menu::BarState>(menu::CONTEXT_MENU_ID_STR.into())
+                .map_or(false, |state| state.has_root())
+        })
     }
 }
 
@@ -1526,6 +1555,7 @@ impl Context {
 }
 
 impl Context {
+    /// Show a ui for settings (style and tessellation options).
     pub fn settings_ui(&self, ui: &mut Ui) {
         use crate::containers::*;
 
@@ -1548,6 +1578,7 @@ impl Context {
             });
     }
 
+    /// Show the state of egui, including its input and output.
     pub fn inspection_ui(&self, ui: &mut Ui) {
         use crate::containers::*;
         crate::trace!(ui);
@@ -1574,14 +1605,14 @@ impl Context {
 
         let pointer_pos = self
             .pointer_hover_pos()
-            .map_or_else(String::new, |pos| format!("{:?}", pos));
-        ui.label(format!("Pointer pos: {}", pointer_pos));
+            .map_or_else(String::new, |pos| format!("{pos:?}"));
+        ui.label(format!("Pointer pos: {pointer_pos}"));
 
         let top_layer = self
             .pointer_hover_pos()
             .and_then(|pos| self.layer_id_at(pos))
             .map_or_else(String::new, |layer| layer.short_debug_format());
-        ui.label(format!("Top layer under mouse: {}", top_layer));
+        ui.label(format!("Top layer under mouse: {top_layer}"));
 
         ui.add_space(16.0);
 
@@ -1667,7 +1698,7 @@ impl Context {
                                     ui.image(texture_id, size);
                                 });
 
-                                ui.label(format!("{} x {}", w, h));
+                                ui.label(format!("{w} x {h}"));
                                 ui.label(format!("{:.3} MB", meta.bytes_used() as f64 * 1e-6));
                                 ui.label(format!("{:?}", meta.name));
                                 ui.end_row();
@@ -1677,6 +1708,7 @@ impl Context {
         });
     }
 
+    /// Shows the contents of [`Self::memory`].
     pub fn memory_ui(&self, ui: &mut crate::Ui) {
         if ui
             .button("Reset all")
@@ -1688,8 +1720,7 @@ impl Context {
 
         let (num_state, num_serialized) = self.data(|d| (d.len(), d.count_serialized()));
         ui.label(format!(
-            "{} widget states stored (of which {} are serialized).",
-            num_state, num_serialized
+            "{num_state} widget states stored (of which {num_serialized} are serialized)."
         ));
 
         ui.horizontal(|ui| {
@@ -1778,6 +1809,7 @@ impl Context {
 }
 
 impl Context {
+    /// Edit the active [`Style`].
     pub fn style_ui(&self, ui: &mut Ui) {
         let mut style: Style = (*self.style()).clone();
         style.ui(ui);
@@ -1793,6 +1825,8 @@ impl Context {
     /// the function is still called, but with no other effect.
     ///
     /// No locks are held while the given closure is called.
+    #[allow(clippy::unused_self)]
+    #[inline]
     pub fn with_accessibility_parent(&self, _id: Id, f: impl FnOnce()) {
         // TODO(emilk): this isn't thread-safe - another thread can call this function between the push/pop calls
         #[cfg(feature = "accesskit")]
@@ -1866,6 +1900,162 @@ impl Context {
             tree: Some(Tree::new(root_id)),
             focus: None,
         })
+    }
+}
+
+/// ## Image loading
+impl Context {
+    /// Associate some static bytes with a `uri`.
+    ///
+    /// The same `uri` may be passed to [`Ui::image2`] later to load the bytes as an image.
+    pub fn include_static_bytes(&self, uri: &'static str, bytes: &'static [u8]) {
+        self.read(|ctx| ctx.loaders.include.insert_static(uri, bytes));
+    }
+
+    /// Associate some bytes with a `uri`.
+    ///
+    /// The same `uri` may be passed to [`Ui::image2`] later to load the bytes as an image.
+    pub fn include_bytes(&self, uri: &'static str, bytes: impl Into<Arc<[u8]>>) {
+        self.read(|ctx| ctx.loaders.include.insert_shared(uri, bytes));
+    }
+
+    /// Append an entry onto the chain of bytes loaders.
+    ///
+    /// See [`load`] for more information.
+    pub fn add_bytes_loader(&self, loader: Arc<dyn load::BytesLoader + Send + Sync + 'static>) {
+        self.write(|ctx| ctx.loaders.bytes.push(loader));
+    }
+
+    /// Append an entry onto the chain of image loaders.
+    ///
+    /// See [`load`] for more information.
+    pub fn add_image_loader(&self, loader: Arc<dyn load::ImageLoader + Send + Sync + 'static>) {
+        self.write(|ctx| ctx.loaders.image.push(loader));
+    }
+
+    /// Append an entry onto the chain of texture loaders.
+    ///
+    /// See [`load`] for more information.
+    pub fn add_texture_loader(&self, loader: Arc<dyn load::TextureLoader + Send + Sync + 'static>) {
+        self.write(|ctx| ctx.loaders.texture.push(loader));
+    }
+
+    /// Release all memory and textures related to the given image URI.
+    ///
+    /// If you attempt to load the image again, it will be reloaded from scratch.
+    pub fn forget_image(&self, uri: &str) {
+        self.write(|ctx| {
+            use crate::load::BytesLoader as _;
+
+            ctx.loaders.include.forget(uri);
+
+            for loader in &ctx.loaders.bytes {
+                loader.forget(uri);
+            }
+
+            for loader in &ctx.loaders.image {
+                loader.forget(uri);
+            }
+
+            for loader in &ctx.loaders.texture {
+                loader.forget(uri);
+            }
+        });
+    }
+
+    /// Try loading the bytes from the given uri using any available bytes loaders.
+    ///
+    /// Loaders are expected to cache results, so that this call is immediate-mode safe.
+    ///
+    /// This calls the loaders one by one in the order in which they were registered.
+    /// If a loader returns [`LoadError::NotSupported`][not_supported],
+    /// then the next loader is called. This process repeats until all loaders have
+    /// been exhausted, at which point this returns [`LoadError::NotSupported`][not_supported].
+    ///
+    /// # Errors
+    /// This may fail with:
+    /// - [`LoadError::NotSupported`][not_supported] if none of the registered loaders support loading the given `uri`.
+    /// - [`LoadError::Custom`][custom] if one of the loaders _does_ support loading the `uri`, but the loading process failed.
+    ///
+    /// [not_supported]: crate::load::LoadError::NotSupported
+    /// [custom]: crate::load::LoadError::Custom
+    pub fn try_load_bytes(&self, uri: &str) -> load::BytesLoadResult {
+        let loaders = self.loaders();
+        for loader in &loaders.bytes {
+            match loader.load(self, uri) {
+                Err(load::LoadError::NotSupported) => continue,
+                result => return result,
+            }
+        }
+
+        Err(load::LoadError::NotSupported)
+    }
+
+    /// Try loading the image from the given uri using any available image loaders.
+    ///
+    /// Loaders are expected to cache results, so that this call is immediate-mode safe.
+    ///
+    /// This calls the loaders one by one in the order in which they were registered.
+    /// If a loader returns [`LoadError::NotSupported`][not_supported],
+    /// then the next loader is called. This process repeats until all loaders have
+    /// been exhausted, at which point this returns [`LoadError::NotSupported`][not_supported].
+    ///
+    /// # Errors
+    /// This may fail with:
+    /// - [`LoadError::NotSupported`][not_supported] if none of the registered loaders support loading the given `uri`.
+    /// - [`LoadError::Custom`][custom] if one of the loaders _does_ support loading the `uri`, but the loading process failed.
+    ///
+    /// [not_supported]: crate::load::LoadError::NotSupported
+    /// [custom]: crate::load::LoadError::Custom
+    pub fn try_load_image(&self, uri: &str, size_hint: load::SizeHint) -> load::ImageLoadResult {
+        let loaders = self.loaders();
+        for loader in &loaders.image {
+            match loader.load(self, uri, size_hint) {
+                Err(load::LoadError::NotSupported) => continue,
+                result => return result,
+            }
+        }
+
+        Err(load::LoadError::NotSupported)
+    }
+
+    /// Try loading the texture from the given uri using any available texture loaders.
+    ///
+    /// Loaders are expected to cache results, so that this call is immediate-mode safe.
+    ///
+    /// This calls the loaders one by one in the order in which they were registered.
+    /// If a loader returns [`LoadError::NotSupported`][not_supported],
+    /// then the next loader is called. This process repeats until all loaders have
+    /// been exhausted, at which point this returns [`LoadError::NotSupported`][not_supported].
+    ///
+    /// # Errors
+    /// This may fail with:
+    /// - [`LoadError::NotSupported`][not_supported] if none of the registered loaders support loading the given `uri`.
+    /// - [`LoadError::Custom`][custom] if one of the loaders _does_ support loading the `uri`, but the loading process failed.
+    ///
+    /// [not_supported]: crate::load::LoadError::NotSupported
+    /// [custom]: crate::load::LoadError::Custom
+    pub fn try_load_texture(
+        &self,
+        uri: &str,
+        texture_options: TextureOptions,
+        size_hint: load::SizeHint,
+    ) -> load::TextureLoadResult {
+        let loaders = self.loaders();
+
+        for loader in &loaders.texture {
+            match loader.load(self, uri, texture_options, size_hint) {
+                Err(load::LoadError::NotSupported) => continue,
+                result => return result,
+            }
+        }
+
+        Err(load::LoadError::NotSupported)
+    }
+
+    fn loaders(&self) -> load::Loaders {
+        crate::profile_function!();
+        self.read(|this| this.loaders.clone()) // TODO(emilk): something less slow
     }
 }
 

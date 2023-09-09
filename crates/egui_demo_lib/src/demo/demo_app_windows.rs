@@ -35,7 +35,8 @@ impl Default for Demos {
             Box::<super::sliders::Sliders>::default(),
             Box::<super::strip_demo::StripDemo>::default(),
             Box::<super::table_demo::TableDemo>::default(),
-            Box::<super::text_edit::TextEdit>::default(),
+            Box::<super::text_edit::TextEditDemo>::default(),
+            Box::<super::text_layout::TextLayoutDemo>::default(),
             Box::<super::widget_gallery::WidgetGallery>::default(),
             Box::<super::window_options::WindowOptions>::default(),
             Box::<super::tests::WindowResizeTest>::default(),
@@ -251,11 +252,11 @@ impl DemoWindows {
 
                 use egui::special_emojis::{GITHUB, TWITTER};
                 ui.hyperlink_to(
-                    format!("{} egui on GitHub", GITHUB),
+                    format!("{GITHUB} egui on GitHub"),
                     "https://github.com/emilk/egui",
                 );
                 ui.hyperlink_to(
-                    format!("{} @ernerfeldt", TWITTER),
+                    format!("{TWITTER} @ernerfeldt"),
                     "https://twitter.com/ernerfeldt",
                 );
 

@@ -1,7 +1,8 @@
-use epaint::{Pos2, Shape, Stroke, Vec2};
 use std::ops::{Bound, RangeBounds, RangeInclusive};
 
-use crate::plot::transform::PlotBounds;
+use egui::{Pos2, Shape, Stroke, Vec2};
+
+use crate::transform::PlotBounds;
 
 /// A point coordinate in the plot.
 ///
@@ -125,8 +126,8 @@ impl ToString for LineStyle {
     fn to_string(&self) -> String {
         match self {
             LineStyle::Solid => "Solid".into(),
-            LineStyle::Dotted { spacing } => format!("Dotted{}Px", spacing),
-            LineStyle::Dashed { length } => format!("Dashed{}Px", length),
+            LineStyle::Dotted { spacing } => format!("Dotted{spacing}Px"),
+            LineStyle::Dashed { length } => format!("Dashed{length}Px"),
         }
     }
 }

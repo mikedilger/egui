@@ -18,14 +18,19 @@ use super::epi_integration::{self, EpiIntegration};
 
 // ----------------------------------------------------------------------------
 
+/// The custom even `eframe` uses with the [`winit`] event loop.
 #[derive(Debug)]
 pub enum UserEvent {
+    /// A repaint is requested.
     RequestRepaint {
+        /// When to repaint.
         when: Instant,
+
         /// What the frame number was when the repaint was _requested_.
         frame_nr: u64,
     },
 
+    /// A request related to [`accesskit`](https://accesskit.dev/).
     #[cfg(feature = "accesskit")]
     AccessKitActionRequest(accesskit_winit::ActionRequestEvent),
 }
@@ -118,6 +123,7 @@ fn with_event_loop<R>(
     })
 }
 
+#[cfg(not(target_os = "ios"))]
 fn run_and_return(
     event_loop: &mut EventLoop<UserEvent>,
     mut winit_app: impl WinitApp,
@@ -144,11 +150,13 @@ fn run_and_return(
             // Platform-dependent event handlers to workaround a winit bug
             // See: https://github.com/rust-windowing/winit/issues/987
             // See: https://github.com/rust-windowing/winit/issues/1619
-            winit::event::Event::RedrawEventsCleared if cfg!(windows) => {
+            #[cfg(target_os = "windows")]
+            winit::event::Event::RedrawEventsCleared => {
                 next_repaint_time = extremely_far_future();
                 winit_app.run_ui_and_paint()
             }
-            winit::event::Event::RedrawRequested(_) if !cfg!(windows) => {
+            #[cfg(not(target_os = "windows"))]
+            winit::event::Event::RedrawRequested(_) => {
                 next_repaint_time = extremely_far_future();
                 winit_app.run_ui_and_paint()
             }
@@ -193,7 +201,7 @@ fn run_and_return(
             EventResult::Wait => {}
             EventResult::RepaintNow => {
                 log::trace!("Repaint caused by winit::Event: {:?}", event);
-                if cfg!(windows) {
+                if cfg!(target_os = "windows") {
                     // Fix flickering on Windows, see https://github.com/emilk/egui/pull/2280
                     next_repaint_time = extremely_far_future();
                     winit_app.run_ui_and_paint();
@@ -242,7 +250,7 @@ fn run_and_return(
     //
     // Note that this approach may cause issues on macOS (emilk/egui#2768); therefore,
     // we only apply this approach on Windows to minimize the affect.
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     {
         event_loop.run_return(|_, _, control_flow| {
             control_flow.set_exit();
@@ -267,11 +275,11 @@ fn run_and_exit(event_loop: EventLoop<UserEvent>, mut winit_app: impl WinitApp +
             // Platform-dependent event handlers to workaround a winit bug
             // See: https://github.com/rust-windowing/winit/issues/987
             // See: https://github.com/rust-windowing/winit/issues/1619
-            winit::event::Event::RedrawEventsCleared if cfg!(windows) => {
+            winit::event::Event::RedrawEventsCleared if cfg!(target_os = "windows") => {
                 next_repaint_time = extremely_far_future();
                 winit_app.run_ui_and_paint()
             }
-            winit::event::Event::RedrawRequested(_) if !cfg!(windows) => {
+            winit::event::Event::RedrawRequested(_) if !cfg!(target_os = "windows") => {
                 next_repaint_time = extremely_far_future();
                 winit_app.run_ui_and_paint()
             }
@@ -299,7 +307,7 @@ fn run_and_exit(event_loop: EventLoop<UserEvent>, mut winit_app: impl WinitApp +
         match event_result {
             EventResult::Wait => {}
             EventResult::RepaintNow => {
-                if cfg!(windows) {
+                if cfg!(target_os = "windows") {
                     // Fix flickering on Windows, see https://github.com/emilk/egui/pull/2280
                     next_repaint_time = extremely_far_future();
                     winit_app.run_ui_and_paint();
@@ -329,6 +337,11 @@ fn run_and_exit(event_loop: EventLoop<UserEvent>, mut winit_app: impl WinitApp +
             next_repaint_time = extremely_far_future();
             ControlFlow::Poll
         } else {
+            // WaitUntil seems to not work on iOS
+            #[cfg(target_os = "ios")]
+            if let Some(window) = winit_app.window() {
+                window.request_redraw();
+            }
             ControlFlow::WaitUntil(next_repaint_time)
         };
     })
@@ -672,7 +685,11 @@ mod glow_integration {
             glutin_window_context.on_resume(event_loop)?;
 
             if let Some(window) = &glutin_window_context.window {
-                epi_integration::apply_native_options_to_window(window, native_options);
+                epi_integration::apply_native_options_to_window(
+                    window,
+                    native_options,
+                    window_settings,
+                );
             }
 
             let gl = unsafe {
@@ -705,7 +722,7 @@ mod glow_integration {
 
             let painter =
                 egui_glow::Painter::new(gl.clone(), "", self.native_options.shader_version)
-                    .unwrap_or_else(|error| panic!("some OpenGL error occurred {}\n", error));
+                    .unwrap_or_else(|err| panic!("An OpenGL error occurred: {err}\n"));
 
             let system_theme = system_theme(gl_window.window(), &self.native_options);
             let mut integration = epi_integration::EpiIntegration::new(
@@ -751,7 +768,7 @@ mod glow_integration {
                 .expect("Single-use AppCreator has unexpectedly already been taken");
             let mut app = app_creator(&epi::CreationContext {
                 egui_ctx: integration.egui_ctx.clone(),
-                integration_info: integration.frame.info(),
+                integration_info: integration.frame.info().clone(),
                 storage: integration.frame.storage(),
                 gl: Some(gl.clone()),
                 #[cfg(feature = "wgpu")]
@@ -799,7 +816,7 @@ mod glow_integration {
             if let Some(mut running) = self.running.take() {
                 running
                     .integration
-                    .save(running.app.as_mut(), running.gl_window.window());
+                    .save(running.app.as_mut(), running.gl_window.window.as_ref());
                 running.app.on_exit(Some(&running.gl));
                 running.painter.destroy();
             }
@@ -914,12 +931,9 @@ mod glow_integration {
 
                 integration.maybe_autosave(app.as_mut(), window);
 
-                if !self.is_focused {
-                    // On Mac, a minimized Window uses up all CPU: https://github.com/emilk/egui/issues/325
-                    // We can't know if we are minimized: https://github.com/rust-windowing/winit/issues/208
-                    // But we know if we are focused (in foreground). When minimized, we are not focused.
-                    // However, a user may want an egui with an animation in the background,
-                    // so we still need to repaint quite fast.
+                if window.is_minimized() == Some(true) {
+                    // On Mac, a minimized Window uses up all CPU:
+                    // https://github.com/emilk/egui/issues/325
                     crate::profile_scope!("bg_sleep");
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
@@ -1048,6 +1062,7 @@ mod glow_integration {
         mut native_options: epi::NativeOptions,
         app_creator: epi::AppCreator,
     ) -> Result<()> {
+        #[cfg(not(target_os = "ios"))]
         if native_options.run_and_return {
             with_event_loop(native_options, |event_loop, native_options| {
                 let glow_eframe =
@@ -1055,6 +1070,13 @@ mod glow_integration {
                 run_and_return(event_loop, glow_eframe)
             })
         } else {
+            let event_loop = create_event_loop_builder(&mut native_options).build();
+            let glow_eframe = GlowWinitApp::new(&event_loop, app_name, native_options, app_creator);
+            run_and_exit(event_loop, glow_eframe);
+        }
+
+        #[cfg(target_os = "ios")]
+        {
             let event_loop = create_event_loop_builder(&mut native_options).build();
             let glow_eframe = GlowWinitApp::new(&event_loop, app_name, native_options, app_creator);
             run_and_exit(event_loop, glow_eframe);
@@ -1070,6 +1092,8 @@ pub use glow_integration::run_glow;
 mod wgpu_integration {
     use std::sync::Arc;
 
+    use parking_lot::Mutex;
+
     use super::*;
 
     /// State that is initialized when the application is first starts running via
@@ -1082,7 +1106,7 @@ mod wgpu_integration {
     }
 
     struct WgpuWinitApp {
-        repaint_proxy: Arc<std::sync::Mutex<EventLoopProxy<UserEvent>>>,
+        repaint_proxy: Arc<Mutex<EventLoopProxy<UserEvent>>>,
         app_name: String,
         native_options: epi::NativeOptions,
         app_creator: Option<epi::AppCreator>,
@@ -1108,7 +1132,7 @@ mod wgpu_integration {
             );
 
             Self {
-                repaint_proxy: Arc::new(std::sync::Mutex::new(event_loop.create_proxy())),
+                repaint_proxy: Arc::new(Mutex::new(event_loop.create_proxy())),
                 app_name: app_name.to_owned(),
                 native_options,
                 running: None,
@@ -1128,7 +1152,11 @@ mod wgpu_integration {
             let window_builder =
                 epi_integration::window_builder(event_loop, title, native_options, window_settings);
             let window = window_builder.build(event_loop)?;
-            epi_integration::apply_native_options_to_window(&window, native_options);
+            epi_integration::apply_native_options_to_window(
+                &window,
+                native_options,
+                window_settings,
+            );
             Ok(window)
         }
 
@@ -1189,7 +1217,7 @@ mod wgpu_integration {
             );
             #[cfg(feature = "accesskit")]
             {
-                integration.init_accesskit(&window, self.repaint_proxy.lock().unwrap().clone());
+                integration.init_accesskit(&window, self.repaint_proxy.lock().clone());
             }
             let theme = system_theme.unwrap_or(self.native_options.default_theme);
             integration.egui_ctx.set_visuals(theme.egui_visuals());
@@ -1206,7 +1234,6 @@ mod wgpu_integration {
                         let frame_nr = info.current_frame_nr;
                         event_loop_proxy
                             .lock()
-                            .unwrap()
                             .send_event(UserEvent::RequestRepaint { when, frame_nr })
                             .ok();
                     });
@@ -1216,7 +1243,7 @@ mod wgpu_integration {
                 .expect("Single-use AppCreator has unexpectedly already been taken");
             let mut app = app_creator(&epi::CreationContext {
                 egui_ctx: integration.egui_ctx.clone(),
-                integration_info: integration.frame.info(),
+                integration_info: integration.frame.info().clone(),
                 storage: integration.frame.storage(),
                 #[cfg(feature = "glow")]
                 gl: None,
@@ -1261,9 +1288,9 @@ mod wgpu_integration {
 
         fn save_and_destroy(&mut self) {
             if let Some(mut running) = self.running.take() {
-                if let Some(window) = &self.window {
-                    running.integration.save(running.app.as_mut(), window);
-                }
+                running
+                    .integration
+                    .save(running.app.as_mut(), self.window.as_ref());
 
                 #[cfg(feature = "glow")]
                 running.app.on_exit(None);
@@ -1335,12 +1362,9 @@ mod wgpu_integration {
 
                 integration.maybe_autosave(app.as_mut(), window);
 
-                if !self.is_focused {
-                    // On Mac, a minimized Window uses up all CPU: https://github.com/emilk/egui/issues/325
-                    // We can't know if we are minimized: https://github.com/rust-windowing/winit/issues/208
-                    // But we know if we are focused (in foreground). When minimized, we are not focused.
-                    // However, a user may want an egui with an animation in the background,
-                    // so we still need to repaint quite fast.
+                if window.is_minimized() == Some(true) {
+                    // On Mac, a minimized Window uses up all CPU:
+                    // https://github.com/emilk/egui/issues/325
                     crate::profile_scope!("bg_sleep");
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
@@ -1485,6 +1509,7 @@ mod wgpu_integration {
         mut native_options: epi::NativeOptions,
         app_creator: epi::AppCreator,
     ) -> Result<()> {
+        #[cfg(not(target_os = "ios"))]
         if native_options.run_and_return {
             with_event_loop(native_options, |event_loop, native_options| {
                 let wgpu_eframe =
@@ -1492,6 +1517,13 @@ mod wgpu_integration {
                 run_and_return(event_loop, wgpu_eframe)
             })
         } else {
+            let event_loop = create_event_loop_builder(&mut native_options).build();
+            let wgpu_eframe = WgpuWinitApp::new(&event_loop, app_name, native_options, app_creator);
+            run_and_exit(event_loop, wgpu_eframe);
+        }
+
+        #[cfg(target_os = "ios")]
+        {
             let event_loop = create_event_loop_builder(&mut native_options).build();
             let wgpu_eframe = WgpuWinitApp::new(&event_loop, app_name, native_options, app_creator);
             run_and_exit(event_loop, wgpu_eframe);

@@ -47,7 +47,7 @@ impl State {
 // ----------------------------------------------------------------------------
 
 // type alias for boxed function to determine row color during grid generation
-type ColorPickerFn = Box<dyn Fn(usize, &Style) -> Option<Color32>>;
+type ColorPickerFn = Box<dyn Send + Sync + Fn(usize, &Style) -> Option<Color32>>;
 
 pub(crate) struct GridLayout {
     ctx: Context,
@@ -60,6 +60,7 @@ pub(crate) struct GridLayout {
     /// State previous frame (if any).
     /// This can be used to predict future sizes of cells.
     prev_state: State,
+
     /// State accumulated during the current frame.
     curr_state: State,
     initial_available: Rect,
@@ -219,9 +220,15 @@ impl GridLayout {
 
     fn paint_row(&mut self, cursor: &mut Rect, painter: &Painter) {
         // handle row color painting based on color-picker function
-        let Some(color_picker) = self.color_picker.as_ref() else { return };
-        let Some(row_color)    = color_picker(self.row, &self.style) else { return };
-        let Some(height)       = self.prev_state.row_height(self.row) else {return };
+        let Some(color_picker) = self.color_picker.as_ref() else {
+            return;
+        };
+        let Some(row_color) = color_picker(self.row, &self.style) else {
+            return;
+        };
+        let Some(height) = self.prev_state.row_height(self.row) else {
+            return;
+        };
         // Paint background for coming row:
         let size = Vec2::new(self.prev_state.full_width(self.spacing.x), height);
         let rect = Rect::from_min_size(cursor.min, size);
@@ -311,7 +318,7 @@ impl Grid {
     /// Setting this will allow for dynamic coloring of rows of the grid object
     pub fn with_row_color<F>(mut self, color_picker: F) -> Self
     where
-        F: Fn(usize, &Style) -> Option<Color32> + 'static,
+        F: Send + Sync + Fn(usize, &Style) -> Option<Color32> + 'static,
     {
         self.color_picker = Some(Box::new(color_picker));
         self
