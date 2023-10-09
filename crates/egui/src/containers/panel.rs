@@ -98,6 +98,7 @@ pub struct SidePanel {
     show_separator_line: bool,
     default_width: f32,
     width_range: Rangef,
+    visuals: Option<style::Widgets>,
 }
 
 impl SidePanel {
@@ -121,6 +122,7 @@ impl SidePanel {
             show_separator_line: true,
             default_width: 200.0,
             width_range: Rangef::new(96.0, f32::INFINITY),
+            visuals: None,
         }
     }
 
@@ -190,6 +192,12 @@ impl SidePanel {
         self.frame = Some(frame);
         self
     }
+
+    /// Optionally override visual style
+    pub fn visuals(mut self, visuals: style::Widgets) -> Self {
+        self.visuals = Some(visuals);
+        self
+    }
 }
 
 impl SidePanel {
@@ -216,6 +224,7 @@ impl SidePanel {
             show_separator_line,
             default_width,
             width_range,
+            visuals,
         } = self;
 
         let available_rect = ui.available_rect_before_wrap();
@@ -296,15 +305,28 @@ impl SidePanel {
         PanelState { rect }.store(ui.ctx(), id);
 
         {
-            let stroke = if is_resizing {
-                ui.style().visuals.widgets.active.fg_stroke // highly visible
-            } else if resize_hover {
-                ui.style().visuals.widgets.hovered.fg_stroke // highly visible
-            } else if show_separator_line {
-                // TODO(emilk): distinguish resizable from non-resizable
-                ui.style().visuals.widgets.noninteractive.bg_stroke // dim
+            let stroke = if let Some(widgets) = visuals {
+                if is_resizing {
+                    widgets.active.fg_stroke // highly visible
+                } else if resize_hover {
+                    widgets.hovered.fg_stroke // highly visible
+                } else if show_separator_line {
+                    // TODO(emilk): distinguish resizable from non-resizable
+                    widgets.noninteractive.bg_stroke // dim
+                } else {
+                    Stroke::NONE
+                }
             } else {
-                Stroke::NONE
+                if is_resizing {
+                    ui.style().visuals.widgets.active.fg_stroke // highly visible
+                } else if resize_hover {
+                    ui.style().visuals.widgets.hovered.fg_stroke // highly visible
+                } else if show_separator_line {
+                    // TODO(emilk): distinguish resizable from non-resizable
+                    ui.style().visuals.widgets.noninteractive.bg_stroke // dim
+                } else {
+                    Stroke::NONE
+                }
             };
             // TODO(emilk): draw line on top of all panels in this ui when https://github.com/emilk/egui/issues/1516 is done
             // In the meantime: nudge the line so its inside the panel, so it won't be covered by neighboring panel
