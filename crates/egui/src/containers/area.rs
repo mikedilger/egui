@@ -14,6 +14,8 @@ pub(crate) struct State {
 
     pub pivot: Align2,
 
+    pub new_pos: Option<Pos2>,
+
     /// Last know size. Used for catching clicks.
     pub size: Vec2,
 
@@ -267,6 +269,7 @@ impl Area {
         let mut state = state.unwrap_or_else(|| State {
             pivot_pos: default_pos.unwrap_or_else(|| automatic_area_position(ctx)),
             pivot,
+            new_pos,
             size: Vec2::ZERO,
             interactable,
         });
@@ -440,6 +443,13 @@ impl Prepared {
         } = self;
 
         state.size = content_ui.min_size();
+
+        // Process new_pos after we know size to obey state.pivot setting
+        if state.size.x > 0.0 && state.size.y > 0.0 {
+            if let Some(fixed_pos) = state.new_pos.take() {
+                state.set_left_top_pos(fixed_pos);
+            }
+        }
 
         ctx.memory_mut(|m| m.areas.set_state(layer_id, state));
 

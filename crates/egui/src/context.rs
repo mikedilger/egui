@@ -206,6 +206,7 @@ impl ContextImpl {
             containers::area::State {
                 pivot_pos: screen_rect.left_top(),
                 pivot: Align2::LEFT_TOP,
+                new_pos: None,
                 size: screen_rect.size(),
                 interactable: true,
             },
