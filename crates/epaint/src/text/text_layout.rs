@@ -290,7 +290,7 @@ fn line_break(paragraph: &Paragraph, job: &LayoutJob, out_rows: &mut Vec<Row>, e
 
                 // (bu5hm4nn) first row indentation gets consumed the first time it's used
                 if first_row_indentation > 0.0 {
-                    first_row_indentation = 0.0
+                    first_row_indentation = 0.0;
                 }
             } else {
                 // Found no place to break, so we have to overrun wrap_width.
