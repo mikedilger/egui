@@ -147,6 +147,9 @@ fn layout_section(
         paragraph.empty_paragraph_height = line_height; // TODO(emilk): replace this hack with actually including `\n` in the glyphs?
     }
 
+    // TODO(bu5hm4nn): in a label widget, `leading_space` is used to adjust for existing text in a screen row,
+    // but the comment on `LayoutSection::leading_space` makes it clear it was originally intended for typographical
+    // indentation and not for screen layout
     paragraph.cursor_x += leading_space;
 
     let mut last_glyph_id = None;
@@ -250,14 +253,14 @@ fn line_break(paragraph: &Paragraph, job: &LayoutJob, out_rows: &mut Vec<Row>, e
     let mut first_row_indentation = paragraph.glyphs[0].pos.x;
     let mut row_start_x = 0.0;
     let mut row_start_idx = 0;
+    let mut non_empty_rows = 0;
 
     for i in 0..paragraph.glyphs.len() {
-        if job.wrap.max_rows <= out_rows.len() {
-            *elided = true;
+        let potential_row_width = paragraph.glyphs[i].max_x() - row_start_x - first_row_indentation;
+
+        if job.wrap.max_rows > 0 && non_empty_rows >= job.wrap.max_rows {
             break;
         }
-
-        let potential_row_width = paragraph.glyphs[i].max_x() - row_start_x;
 
         if job.wrap.max_width + wrap_width_margin < potential_row_width {
             // Row break:
@@ -303,6 +306,12 @@ fn line_break(paragraph: &Paragraph, job: &LayoutJob, out_rows: &mut Vec<Row>, e
                 row_start_idx = last_kept_index + 1;
                 row_start_x = paragraph.glyphs[row_start_idx].pos.x;
                 row_break_candidates.forget_before_idx(row_start_idx);
+                non_empty_rows += 1;
+
+                // (bu5hm4nn) first row indentation gets consumed the first time it's used
+                if first_row_indentation > 0.0 {
+                    first_row_indentation = 0.0;
+                }
             } else {
                 // Found no place to break, so we have to overrun wrap_width.
             }
@@ -948,6 +957,7 @@ impl RowBreakCandidates {
             .flatten()
     }
 
+    #[allow(dead_code)]
     fn has_good_candidate(&self, break_anywhere: bool) -> bool {
         if break_anywhere {
             self.any.is_some()
@@ -1113,4 +1123,37 @@ mod tests {
             vec!["日本語とEnglish", "の混在した文章"]
         );
     }
+}
+
+#[test]
+fn test_line_break_first_row_not_empty() {
+    let mut fonts = FontsImpl::new(1.0, 1024, super::FontDefinitions::default());
+    let mut layout_job = LayoutJob::single_section(
+        "SomeSuperLongTextThatDoesNotHaveAnyGoodBreakCandidatesButStillNeedsToBeBroken".into(),
+        super::TextFormat::default(),
+    );
+
+    // a small area
+    layout_job.wrap.max_width = 110.0;
+
+    // give the first row a leading space, simulating that there already is
+    // text in this visual row
+    layout_job.sections.first_mut().unwrap().leading_space = 50.0;
+
+    let galley = super::layout(&mut fonts, layout_job.into());
+    assert_eq!(
+        galley
+            .rows
+            .iter()
+            .map(|row| row.glyphs.iter().map(|g| g.chr).collect::<String>())
+            .collect::<Vec<_>>(),
+        vec![
+            "SomeSup",
+            "erLongTextThat",
+            "DoesNotHaveAn",
+            "yGoodBreakCand",
+            "idatesButStillNe",
+            "edsToBeBroken"
+        ]
+    );
 }
