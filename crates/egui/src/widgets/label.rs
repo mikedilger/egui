@@ -179,6 +179,10 @@ impl Label {
             }
             let galley = ui.fonts(|fonts| fonts.layout_job(layout_job));
 
+            if galley.on_newline {
+                ui.end_row();
+            }
+
             let pos = pos2(ui.max_rect().left(), ui.cursor().top());
             assert!(!galley.rows.is_empty(), "Galleys are never empty");
 

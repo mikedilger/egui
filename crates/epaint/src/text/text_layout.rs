@@ -80,6 +80,7 @@ pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
             num_vertices: 0,
             num_indices: 0,
             pixels_per_point: fonts.pixels_per_point(),
+            on_newline: false,
             elided: true,
         };
     }
@@ -262,58 +263,65 @@ fn line_break(paragraph: &Paragraph, job: &LayoutJob, out_rows: &mut Vec<Row>, e
             break;
         }
 
-        if job.wrap.max_width + wrap_width_margin < potential_row_width {
-            // Row break:
+        // (bu5hm4nn): we want to actually allow as much text as possible on the first line so
+        // we don't need a special case for the first row, but we need to subtract
+        // the first_row_indentation from the allowed max width
+        if potential_row_width > (job.wrap.max_width + wrap_width_margin - first_row_indentation) {
+            match row_break_candidates.get(job.wrap.break_anywhere) {
+                None => {}
+                Some(0) => {
+                    // if the best break candidate is the first char, add a newline
+                    // immediately before proceeding with any chars
+                    out_rows.push(Row {
+                        section_index_at_start: 0,
+                        glyphs: Vec::new(),
+                        rect: Rect::ZERO,
+                        visuals: Default::default(),
+                        ends_with_newline: false,
+                    });
 
-            if first_row_indentation > 0.0
-                && !row_break_candidates.has_good_candidate(job.wrap.break_anywhere)
-            {
-                // Allow the first row to be completely empty, because we know there will be more space on the next row:
-                // TODO(emilk): this records the height of this first row as zero, though that is probably fine since first_row_indentation usually comes with a first_row_min_height.
-                out_rows.push(Row {
-                    section_index_at_start: paragraph.section_index_at_start,
-                    glyphs: vec![],
-                    visuals: Default::default(),
-                    rect: rect_from_x_range(first_row_indentation..=first_row_indentation),
-                    ends_with_newline: false,
-                });
-                row_start_x += first_row_indentation;
-                first_row_indentation = 0.0;
-            } else if let Some(last_kept_index) = row_break_candidates.get(job.wrap.break_anywhere)
-            {
-                let glyphs: Vec<Glyph> = paragraph.glyphs[row_start_idx..=last_kept_index]
-                    .iter()
-                    .copied()
-                    .map(|mut glyph| {
-                        glyph.pos.x -= row_start_x;
-                        glyph
-                    })
-                    .collect();
+                    // Start a new row:
+                    row_start_x = paragraph.glyphs[row_start_idx].pos.x;
+                    row_break_candidates.forget_before_idx(1);
 
-                let section_index_at_start = glyphs[0].section_index;
-                let paragraph_min_x = glyphs[0].pos.x;
-                let paragraph_max_x = glyphs.last().unwrap().max_x();
-
-                out_rows.push(Row {
-                    section_index_at_start,
-                    glyphs,
-                    visuals: Default::default(),
-                    rect: rect_from_x_range(paragraph_min_x..=paragraph_max_x),
-                    ends_with_newline: false,
-                });
-
-                // Start a new row:
-                row_start_idx = last_kept_index + 1;
-                row_start_x = paragraph.glyphs[row_start_idx].pos.x;
-                row_break_candidates.forget_before_idx(row_start_idx);
-                non_empty_rows += 1;
-
-                // (bu5hm4nn) first row indentation gets consumed the first time it's used
-                if first_row_indentation > 0.0 {
-                    first_row_indentation = 0.0;
+                    // (bu5hm4nn) first row indentation gets consumed the first time it's used
+                    if first_row_indentation > 0.0 {
+                        first_row_indentation = 0.0;
+                    }
                 }
-            } else {
-                // Found no place to break, so we have to overrun wrap_width.
+                Some(last_kept_index) => {
+                    let glyphs: Vec<Glyph> = paragraph.glyphs[row_start_idx..=last_kept_index]
+                        .iter()
+                        .copied()
+                        .map(|mut glyph| {
+                            glyph.pos.x -= row_start_x;
+                            glyph
+                        })
+                        .collect();
+
+                    let section_index_at_start = glyphs[0].section_index;
+                    let paragraph_min_x = glyphs[0].pos.x;
+                    let paragraph_max_x = glyphs.last().unwrap().max_x();
+
+                    out_rows.push(Row {
+                        section_index_at_start,
+                        glyphs,
+                        visuals: Default::default(),
+                        rect: rect_from_x_range(paragraph_min_x..=paragraph_max_x),
+                        ends_with_newline: false,
+                    });
+
+                    // Start a new row:
+                    row_start_idx = last_kept_index + 1;
+                    row_start_x = paragraph.glyphs[row_start_idx].pos.x;
+                    row_break_candidates.forget_before_idx(row_start_idx);
+                    non_empty_rows += 1;
+
+                    // (bu5hm4nn) first row indentation gets consumed the first time it's used
+                    if first_row_indentation > 0.0 {
+                        first_row_indentation = 0.0;
+                    }
+                }
             }
         }
 
@@ -590,10 +598,23 @@ fn galley_from_rows(
     mut rows: Vec<Row>,
     elided: bool,
 ) -> Galley {
+    let mut on_newline = false;
     let mut first_row_min_height = job.first_row_min_height;
     let mut cursor_y = 0.0;
     let mut min_x: f32 = 0.0;
     let mut max_x: f32 = 0.0;
+
+    // if no chars fit on the current cursor line, then layout will pass a row with
+    // a Rect::ZERO as the first row. We will remove it and set the on_newline flag instead
+    // so that calling code can handle moving the cursor (to preserve spacing, etc.)
+    // EXCEPTION: we will not remove it if it is the only row
+    if let Some(row) = rows.first() {
+        if rows.len() > 1 && row.rect == Rect::ZERO {
+            rows.remove(0);
+            on_newline = true;
+        }
+    }
+
     for row in &mut rows {
         let mut line_height = first_row_min_height.max(row.rect.height());
         let mut row_ascent = 0.0f32;
@@ -667,6 +688,7 @@ fn galley_from_rows(
     Galley {
         job,
         rows,
+        on_newline,
         elided,
         rect,
         mesh_bounds,
@@ -1123,37 +1145,49 @@ mod tests {
             vec!["日本語とEnglish", "の混在した文章"]
         );
     }
-}
 
-#[test]
-fn test_line_break_first_row_not_empty() {
-    let mut fonts = FontsImpl::new(1.0, 1024, super::FontDefinitions::default());
-    let mut layout_job = LayoutJob::single_section(
-        "SomeSuperLongTextThatDoesNotHaveAnyGoodBreakCandidatesButStillNeedsToBeBroken".into(),
-        super::TextFormat::default(),
-    );
+    #[test]
+    fn test_line_break_first_row_not_empty() {
+        let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
+        let mut layout_job = LayoutJob::single_section(
+            "SomeSuperLongTextThatDoesNotHaveAnyGoodBreakCandidatesButStillNeedsToBeBroken".into(),
+            TextFormat::default(),
+        );
 
-    // a small area
-    layout_job.wrap.max_width = 110.0;
+        // a small area
+        layout_job.wrap.max_width = 110.0;
 
-    // give the first row a leading space, simulating that there already is
-    // text in this visual row
-    layout_job.sections.first_mut().unwrap().leading_space = 50.0;
+        // give the first row a leading space, simulating that there already is
+        // text in this visual row
+        layout_job.sections.first_mut().unwrap().leading_space = 50.0;
 
-    let galley = super::layout(&mut fonts, layout_job.into());
-    assert_eq!(
-        galley
-            .rows
-            .iter()
-            .map(|row| row.glyphs.iter().map(|g| g.chr).collect::<String>())
-            .collect::<Vec<_>>(),
-        vec![
-            "SomeSup",
-            "erLongTextThat",
-            "DoesNotHaveAn",
-            "yGoodBreakCand",
-            "idatesButStillNe",
-            "edsToBeBroken"
-        ]
-    );
+        let galley = super::layout(&mut fonts, layout_job.into());
+        assert_eq!(
+            galley
+                .rows
+                .iter()
+                .map(|row| row.glyphs.iter().map(|g| g.chr).collect::<String>())
+                .collect::<Vec<_>>(),
+            vec![
+                "SomeSup",
+                "erLongTextThat",
+                "DoesNotHaveAn",
+                "yGoodBreakCand",
+                "idatesButStillNe",
+                "edsToBeBroken"
+            ]
+        );
+    }
+
+    // #[test]
+    // fn test_never_exceed_max_width() {}
+
+    #[test]
+    fn test_never_empty_galley() {
+        let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
+        let mut layout_job = LayoutJob::single_section("\r".into(), TextFormat::default());
+        layout_job.wrap.max_width = 0.0;
+        let galley = layout(&mut fonts, layout_job.into());
+        assert_eq!(galley.rows.len(), 1);
+    }
 }

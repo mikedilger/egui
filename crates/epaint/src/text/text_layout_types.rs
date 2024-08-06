@@ -487,6 +487,9 @@ pub struct Galley {
     /// can be split up into multiple rows.
     pub rows: Vec<Row>,
 
+    /// Set to true if the whole galley needs to go on a newline
+    pub on_newline: bool,
+
     /// Set to true the text was truncated due to [`TextWrapping::max_rows`].
     pub elided: bool,
 
